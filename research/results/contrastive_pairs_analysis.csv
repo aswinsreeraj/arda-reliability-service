@@ -1,0 +1,11 @@
+pair_id,E1_sim,E1_rank_b_in_a,E1_rank_a_in_b,E1_in_top1,E1_in_top3,E2_sim,E2_rank_b_in_a,E2_rank_a_in_b,E2_in_top1,E2_in_top3,E3_sim,E3_rank_b_in_a,E3_rank_a_in_b,E3_in_top1,E3_in_top3,E4_sim,E4_rank_b_in_a,E4_rank_a_in_b,E4_in_top1,E4_in_top3
+pair_01_filing_timeline,0.9741,1,1,True,True,0.9801,1,1,True,True,0.9902,1,1,True,True,0.9895,1,1,True,True
+pair_02_return_tracking,0.9904,1,1,True,True,0.9937,1,1,True,True,0.9961,1,1,True,True,0.9963,1,1,True,True
+pair_03_3ds_authentication,0.962,1,1,True,True,0.9806,1,1,True,True,0.9858,1,1,True,True,0.988,1,1,True,True
+pair_04_delivery_location,0.9914,1,1,True,True,0.9921,1,1,True,True,0.9913,1,1,True,True,0.9929,1,1,True,True
+pair_05_cancellation_timing,0.9875,1,1,True,True,0.9942,1,1,True,True,0.9972,1,1,True,True,0.9981,1,1,True,True
+pair_06_duplicate_vs_distinct,0.9899,1,1,True,True,0.9944,1,1,True,True,0.9937,1,1,True,True,0.9952,1,1,True,True
+pair_07_digital_activation,0.9667,1,1,True,True,0.9689,1,1,True,True,0.9895,1,1,True,True,0.9911,1,1,True,True
+pair_08_service_work_order,0.9455,1,1,True,True,0.957,1,1,True,True,0.9843,1,1,True,True,0.9874,1,1,True,True
+pair_09_hotel_cancellation_window,0.9983,1,1,True,True,0.9989,1,1,True,True,0.9995,1,1,True,True,0.9993,1,1,True,True
+pair_10_restocking_fee_disclosure,0.9822,1,1,True,True,0.9815,1,1,True,True,0.9914,1,1,True,True,0.9922,1,1,True,True

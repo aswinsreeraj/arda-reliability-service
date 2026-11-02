@@ -1,0 +1,5 @@
+experiment_id,model_name,template_name,top1_accuracy,top1_f1_macro,top1_approve_f1,top1_reject_f1,top3_accuracy,top3_f1_macro,top5_accuracy,top5_f1_macro,mean_same_label_similarity,mean_diff_label_similarity,similarity_separation,per_example_embedding_ms,per_query_retrieval_ms,peak_memory_mb,device
+E1,BAAI/bge-small-en-v1.5,raw_value,0.41,0.4099,0.4158,0.404,0.47,0.4695,0.46,0.4598,0.7926,0.8071,-0.0145,9.54,0.021,127.27,cuda
+E2,BAAI/bge-small-en-v1.5,ratio_verbalized,0.46,0.46,0.46,0.46,0.48,0.4798,0.48,0.4798,0.8133,0.8224,-0.0091,2.73,0.015,128.77,cuda
+E3,intfloat/e5-base-v2,raw_value,0.45,0.4499,0.4554,0.4444,0.39,0.3885,0.53,0.5296,0.8646,0.8713,-0.0066,5.72,0.012,418.73,cuda
+E4,intfloat/e5-base-v2,ratio_verbalized,0.45,0.4499,0.4554,0.4444,0.45,0.4473,0.44,0.438,0.8678,0.8714,-0.0036,7.05,0.019,0.0,cuda

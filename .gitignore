@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Mypy cache
+.mypy_cache/
+
+# Experiment artifacts and caches
+research/experiments/.cache/
+*.embedding_cache.pkl
+*.embedding_cache.json
+
