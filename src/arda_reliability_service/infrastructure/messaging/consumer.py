@@ -17,6 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from arda_reliability_service.application.ports.embedding_provider import (
     EmbeddingProviderPort,
 )
+from arda_reliability_service.application.ports.event_authorizer import (
+    EventAuthorizerPort,
+)
 from arda_reliability_service.application.use_cases.ingest_human_feedback import (
     HumanFeedbackIngestionOutcome,
     IngestHumanFeedbackUseCase,
@@ -26,11 +29,16 @@ from arda_reliability_service.domain.exceptions import (
     DomainValidationError,
     EventValidationError,
     InvalidDescriptionError,
+    UnauthorizedProducerError,
+    UnauthorizedReviewerError,
     UnreviewedAgentDecisionError,
     UnsupportedEventVersionError,
 )
 from arda_reliability_service.infrastructure.database.pg_feedback_repository import (
     PgHumanFeedbackRepository,
+)
+from arda_reliability_service.infrastructure.messaging.authorizer import (
+    TrustedProducerAuthorizer,
 )
 from arda_reliability_service.infrastructure.messaging.events import (
     HumanResolutionEventDTO,
@@ -47,6 +55,7 @@ class RedpandaFeedbackConsumer:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         embedding_provider: EmbeddingProviderPort,
+        authorizer: EventAuthorizerPort | None = None,
         settings: Settings | None = None,
         consumer: AIOKafkaConsumer | None = None,
         producer: AIOKafkaProducer | None = None,
@@ -56,6 +65,9 @@ class RedpandaFeedbackConsumer:
         self.session_factory = session_factory
         self.embedding_provider = embedding_provider
         self.metrics = metrics or ConsumerMetrics()
+        self.authorizer = authorizer or TrustedProducerAuthorizer(
+            settings=self.settings
+        )
 
         self.brokers = self.settings.redpanda_brokers
         self.topic = self.settings.redpanda_topic
@@ -137,8 +149,11 @@ class RedpandaFeedbackConsumer:
         error_type: str,
         error_message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        """Publish a permanently invalid or exhausted message to the Dead-Letter Queue (DLQ)."""
+    ) -> bool:
+        """Publish a permanently invalid or exhausted message to the Dead-Letter Queue (DLQ).
+
+        Returns True if the message was acknowledged by the DLQ broker, or False if publication failed.
+        """
         self.metrics.record_dead_letter()
         dlq_record = {
             "error_type": error_type,
@@ -151,9 +166,7 @@ class RedpandaFeedbackConsumer:
                 dlq_record["raw_payload"] = raw_payload.decode(
                     "utf-8", errors="replace"
                 )
-            except UnicodeDecodeError:
-                dlq_record["raw_payload"] = "<binary payload omitted>"
-            except AttributeError:
+            except Exception:  # noqa: BLE001
                 dlq_record["raw_payload"] = "<binary payload omitted>"
         else:
             dlq_record["raw_payload"] = raw_payload
@@ -168,8 +181,11 @@ class RedpandaFeedbackConsumer:
             try:
                 val_bytes = json.dumps(dlq_record).encode("utf-8")
                 await self._producer.send_and_wait(self.dlq_topic, value=val_bytes)
+                return True
             except Exception as ex:  # noqa: BLE001
                 logger.error("Failed to forward event to DLQ: %s", ex)
+                return False
+        return False
 
     async def process_single_message(self, msg: Any) -> bool:
         """Process a single Kafka message end-to-end with validation, idempotency, and retry.
@@ -194,7 +210,7 @@ class RedpandaFeedbackConsumer:
                 getattr(msg, "partition", None),
                 getattr(msg, "offset", None),
             )
-            await self._send_to_dlq(
+            return await self._send_to_dlq(
                 raw_payload=raw_value,
                 error_type="JSON_DECODE_ERROR",
                 error_message=str(e),
@@ -203,11 +219,12 @@ class RedpandaFeedbackConsumer:
                     "offset": getattr(msg, "offset", None),
                 },
             )
-            return True
 
-        # 2. Schema and Domain Validation
+        # 2. Schema and Authorization Validation
         try:
             dto = HumanResolutionEventDTO.model_validate(payload_dict)
+            if self.authorizer is not None:
+                self.authorizer.authorize_event(dto.to_domain())
         except (
             ValidationError,
             EventValidationError,
@@ -215,14 +232,16 @@ class RedpandaFeedbackConsumer:
             UnreviewedAgentDecisionError,
             InvalidDescriptionError,
             DomainValidationError,
+            UnauthorizedProducerError,
+            UnauthorizedReviewerError,
         ) as val_err:
             self.metrics.record_invalid()
             logger.error(
-                "Invalid event schema or policy violation: %s (event_id=%s)",
+                "Invalid event schema or authorization failure: %s (event_id=%s)",
                 val_err,
                 payload_dict.get("event_id"),
             )
-            await self._send_to_dlq(
+            return await self._send_to_dlq(
                 raw_payload=raw_value,
                 error_type=type(val_err).__name__,
                 error_message=str(val_err),
@@ -233,7 +252,6 @@ class RedpandaFeedbackConsumer:
                     "offset": getattr(msg, "offset", None),
                 },
             )
-            return True
 
         # 3. Process Event with Bounded Retries
         attempts = 0
@@ -247,6 +265,7 @@ class RedpandaFeedbackConsumer:
                     use_case = IngestHumanFeedbackUseCase(
                         repository=repo,
                         embedding_provider=self.embedding_provider,
+                        authorizer=self.authorizer,
                     )
                     result = await use_case.execute(dto)
                     await session.commit()
@@ -282,6 +301,19 @@ class RedpandaFeedbackConsumer:
                 )
                 return True
 
+            except (UnauthorizedProducerError, UnauthorizedReviewerError) as auth_err:
+                self.metrics.record_invalid()
+                logger.error(
+                    "Authorization failure during event processing: %s (event_id=%s)",
+                    auth_err,
+                    dto.event_id,
+                )
+                return await self._send_to_dlq(
+                    raw_payload=raw_value,
+                    error_type=type(auth_err).__name__,
+                    error_message=str(auth_err),
+                    metadata={"event_id": dto.event_id},
+                )
             except Exception as proc_err:  # noqa: BLE001
                 is_embedding = "embedding" in str(proc_err).lower()
                 self.metrics.record_failure(is_embedding=is_embedding)
@@ -304,21 +336,35 @@ class RedpandaFeedbackConsumer:
                         dto.event_id,
                         proc_err,
                     )
-                    await self._send_to_dlq(
+                    return await self._send_to_dlq(
                         raw_payload=raw_value,
                         error_type="MAX_RETRIES_EXHAUSTED",
                         error_message=str(proc_err),
                         metadata={"event_id": dto.event_id, "attempts": attempts},
                     )
-                    return True
 
         return False
 
-    async def _commit_message_offset(self, msg: Any) -> None:
-        """Manually commit offset for a processed message."""
+    async def _commit_message_offset(self, msg: Any) -> bool:
+        """Manually commit offset for a processed message.
+
+        Returns True if offset commit succeeded, False otherwise.
+        """
         if self._consumer is not None and hasattr(self._consumer, "commit"):
-            tp = TopicPartition(msg.topic, msg.partition)
-            await self._consumer.commit({tp: OffsetAndMetadata(msg.offset + 1, "")})
+            try:
+                tp = TopicPartition(msg.topic, msg.partition)
+                await self._consumer.commit({tp: OffsetAndMetadata(msg.offset + 1, "")})
+                return True
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    "Failed to commit offset %s on topic %s partition %s: %s",
+                    getattr(msg, "offset", None),
+                    getattr(msg, "topic", None),
+                    getattr(msg, "partition", None),
+                    e,
+                )
+                return False
+        return True
 
     async def _consume_loop(self) -> None:
         """Main polling and consumption loop."""

@@ -18,7 +18,7 @@ from arda_reliability_service.domain.exceptions import (
 )
 
 VALID_LABELS = frozenset({"APPROVE", "REJECT"})
-VALID_STATUSES = frozenset({"active", "archived", "pending"})
+VALID_STATUSES = frozenset({"active", "archived", "pending", "quarantined", "disputed"})
 
 
 class HumanResolutionStatus(str, Enum):
@@ -27,6 +27,7 @@ class HumanResolutionStatus(str, Enum):
     PROCESSED = "PROCESSED"
     IDEMPOTENT_DUPLICATE = "IDEMPOTENT_DUPLICATE"
     CONFLICT = "CONFLICT"
+    QUARANTINED = "QUARANTINED"
     FAILED = "FAILED"
 
 
@@ -97,6 +98,8 @@ class HumanResolutionEvent:
     reviewer_id: str
     resolved_at: datetime
     correlation_id: str = ""
+    producer_id: str = "arda.human-review-service"
+    producer_token: str = ""
 
     def __post_init__(self) -> None:
         """Validate domain invariants for human resolution event."""
@@ -137,6 +140,9 @@ class HumanResolutionEvent:
 
         if not self.reviewer_id or not self.reviewer_id.strip():
             raise DomainValidationError("reviewer_id must not be empty or whitespace.")
+
+        if not self.producer_id or not self.producer_id.strip():
+            raise DomainValidationError("producer_id must not be empty or whitespace.")
 
         if not isinstance(self.resolved_at, datetime):
             raise DomainValidationError(

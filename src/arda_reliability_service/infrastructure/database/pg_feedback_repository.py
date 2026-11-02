@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -90,13 +91,38 @@ class PgHumanFeedbackRepository(HumanFeedbackRepositoryPort):
         model = res.scalar_one_or_none()
         return self._reference_model_to_entity(model) if model is not None else None
 
+    async def quarantine_reference_example(
+        self,
+        tenant_id: UUID,
+        agent_id: UUID,
+        case_id: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Mark an existing reference example as quarantined and exclude it from retrieval."""
+        res = await self.session.execute(
+            select(ReferenceExampleModel).where(
+                ReferenceExampleModel.tenant_id == tenant_id,
+                ReferenceExampleModel.agent_id == agent_id,
+                ReferenceExampleModel.example_id == case_id,
+            )
+        )
+        ref_model = res.scalar_one_or_none()
+        if ref_model is not None:
+            updated_meta = dict(ref_model.metadata_)
+            if details:
+                updated_meta["conflict"] = details
+            ref_model.status = "quarantined"
+            ref_model.metadata_ = updated_meta
+            ref_model.updated_at = datetime.now(UTC)
+            await self.session.flush()
+
     async def record_conflict(
         self,
         event: HumanResolutionEvent,
         existing_label: str,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Record a conflicting human resolution without overwriting existing reference."""
+        """Record a conflicting human resolution and quarantine existing reference example without overwriting its label."""
         conflict_payload = details or {
             "existing_label": existing_label,
             "new_label": event.human_decision,
@@ -104,6 +130,15 @@ class PgHumanFeedbackRepository(HumanFeedbackRepositoryPort):
             "reviewer_id": event.reviewer_id,
         }
 
+        # 1. Quarantine existing reference example so it is excluded from future retrieval
+        await self.quarantine_reference_example(
+            tenant_id=event.tenant_id,
+            agent_id=event.agent_id,
+            case_id=event.case_id,
+            details=conflict_payload,
+        )
+
+        # 2. Record conflict audit event
         stmt = (
             insert(HumanFeedbackEventModel)
             .values(
@@ -159,8 +194,12 @@ class PgHumanFeedbackRepository(HumanFeedbackRepositoryPort):
         self,
         event: HumanResolutionEvent,
         reference: ReferenceExample,
-    ) -> None:
-        """Atomically persist a new reference example and its originating event record."""
+    ) -> bool:
+        """Atomically persist a new reference example and its originating event record.
+
+        Returns True if the reference example was inserted, or False if an existing
+        reference example for (tenant_id, agent_id, example_id) already existed.
+        """
         if reference.embedding is None:
             raise ValueError(
                 f"Cannot persist reference '{reference.example_id}' without an embedding vector."
@@ -189,7 +228,35 @@ class PgHumanFeedbackRepository(HumanFeedbackRepositoryPort):
                 index_elements=["tenant_id", "agent_id", "example_id"]
             )
         )
-        await self.session.execute(ref_stmt)
+        ref_res = await self.session.execute(ref_stmt)
+        rowcount = getattr(ref_res, "rowcount", -1)
+
+        if rowcount == 0:
+            # Concurrent race: reference was already inserted by a competing transaction
+            existing_ref = await self.get_reference_example(
+                tenant_id=reference.tenant_id,
+                agent_id=reference.agent_id,
+                case_id=reference.example_id,
+            )
+            if existing_ref is not None:
+                if existing_ref.label != reference.label:
+                    conflict_details = {
+                        "existing_label": existing_ref.label,
+                        "new_label": reference.label,
+                        "existing_source": existing_ref.source,
+                        "case_id": reference.example_id,
+                        "reviewer_id": event.reviewer_id,
+                        "quarantined_at": datetime.now(UTC).isoformat(),
+                        "reason": "Concurrent conflicting human adjudication",
+                    }
+                    await self.record_conflict(
+                        event=event,
+                        existing_label=existing_ref.label,
+                        details=conflict_details,
+                    )
+                else:
+                    await self.record_duplicate(event)
+            return False
 
         # 2. Insert Event Record
         event_stmt = (
@@ -213,6 +280,7 @@ class PgHumanFeedbackRepository(HumanFeedbackRepositoryPort):
         )
         await self.session.execute(event_stmt)
         await self.session.flush()
+        return True
 
     async def count_events(
         self,

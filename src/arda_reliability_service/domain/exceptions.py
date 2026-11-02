@@ -65,3 +65,15 @@ class ConflictingHumanResolutionError(ReliabilityDomainError):
 
 class EventProcessingError(ReliabilityDomainError):
     """Raised when an unrecoverable failure occurs during event processing."""
+
+
+class UnauthorizedProducerError(ReliabilityDomainError):
+    """Raised when an event originates from an untrusted or unauthenticated producer."""
+
+
+class UnauthorizedReviewerError(ReliabilityDomainError):
+    """Raised when a human resolution event cannot establish authorized reviewer credentials."""
+
+
+class DLQPublicationError(ReliabilityDomainError):
+    """Raised when forwarding a failed message to the Dead-Letter Queue fails."""

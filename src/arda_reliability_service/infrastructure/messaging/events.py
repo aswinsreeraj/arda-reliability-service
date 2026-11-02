@@ -57,6 +57,14 @@ class HumanResolutionEventDTO(BaseModel):
     correlation_id: str = Field(
         default="", description="Distributed trace or workflow execution ID"
     )
+    producer_id: str = Field(
+        default="arda.human-review-service",
+        description="Identifier of the publishing service",
+    )
+    producer_token: str = Field(
+        default="arda-producer-secret-default",
+        description="Authentication token proving authorized producer boundary",
+    )
 
     @field_validator("event_id")
     @classmethod
@@ -132,5 +140,6 @@ class HumanResolutionEventDTO(BaseModel):
             reviewer_id=self.reviewer_id,
             resolved_at=self.resolved_at,
             correlation_id=self.correlation_id,
+            producer_id=self.producer_id,
+            producer_token=self.producer_token,
         )
-

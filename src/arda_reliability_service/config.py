@@ -114,6 +114,22 @@ class Settings(BaseSettings):
         default="earliest",
         description="Offset reset strategy: 'earliest' or 'latest'",
     )
+    redpanda_trusted_producers: list[str] = Field(
+        default=[
+            "arda.human-review-service",
+            "arda.gateway.review-worker",
+            "arda.workflow-engine",
+        ],
+        description="Allowed trusted event producer service identities",
+    )
+    redpanda_producer_secret: str = Field(
+        default="arda-producer-secret-default",
+        description="Shared secret for authenticating trusted event producers",
+    )
+    redpanda_enforce_producer_auth: bool = Field(
+        default=True,
+        description="Whether to strictly enforce producer authentication and reviewer screening",
+    )
 
     # Provisional Reliability Scoring & Gate Thresholds (Week 3 experimental defaults)
     # NOTE: These values are experimental defaults established for developmental gating.

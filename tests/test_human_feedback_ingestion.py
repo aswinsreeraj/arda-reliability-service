@@ -88,7 +88,7 @@ class MockEmbeddingProvider(EmbeddingProviderPort):
 
     @property
     def model_name(self) -> str:
-        return "mock-bge-small"
+        return "BAAI/bge-small-en-v1.5"
 
     def generate_embedding(self, text: str, is_query: bool = False) -> list[float]:
         if self.should_fail:

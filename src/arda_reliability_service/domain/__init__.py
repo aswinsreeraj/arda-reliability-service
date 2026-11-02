@@ -8,6 +8,7 @@ from arda_reliability_service.domain.entities import (
 from arda_reliability_service.domain.exceptions import (
     AgentIsolationViolationError,
     ConflictingHumanResolutionError,
+    DLQPublicationError,
     DomainValidationError,
     DuplicateReferenceExampleError,
     EventProcessingError,
@@ -20,6 +21,8 @@ from arda_reliability_service.domain.exceptions import (
     ReliabilityDomainError,
     ReliabilityEvaluationError,
     TenantIsolationViolationError,
+    UnauthorizedProducerError,
+    UnauthorizedReviewerError,
     UnreviewedAgentDecisionError,
     UnsupportedEventVersionError,
 )
@@ -43,6 +46,7 @@ from arda_reliability_service.domain.value_objects import (
 __all__ = [
     "AgentIsolationViolationError",
     "ConflictingHumanResolutionError",
+    "DLQPublicationError",
     "DomainValidationError",
     "DuplicateReferenceExampleError",
     "EvaluationReasonCode",
@@ -70,6 +74,8 @@ __all__ = [
     "RetrievalResultSet",
     "ScoringConfig",
     "TenantIsolationViolationError",
+    "UnauthorizedProducerError",
+    "UnauthorizedReviewerError",
     "UnreviewedAgentDecisionError",
     "UnsupportedEventVersionError",
 ]

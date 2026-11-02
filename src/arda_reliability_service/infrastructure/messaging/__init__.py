@@ -1,5 +1,8 @@
 """Messaging infrastructure for Redpanda/Kafka event streaming."""
 
+from arda_reliability_service.infrastructure.messaging.authorizer import (
+    TrustedProducerAuthorizer,
+)
 from arda_reliability_service.infrastructure.messaging.consumer import (
     RedpandaFeedbackConsumer,
 )
@@ -18,4 +21,5 @@ __all__ = [
     "HumanResolutionEventDTO",
     "MetricsSnapshot",
     "RedpandaFeedbackConsumer",
+    "TrustedProducerAuthorizer",
 ]

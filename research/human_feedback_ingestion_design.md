@@ -6,24 +6,65 @@ The ARDA Reliability Service provides runtime reliability gating for autonomous 
 
 The **Asynchronous Human Feedback Ingestion Pipeline** closes this governance loop by streaming authoritative human resolution events from Redpanda/Kafka into the Reliability Service, generating dense semantic embeddings exclusively from the case narrative, and persisting high-integrity reference examples into PostgreSQL with pgvector.
 
+This design incorporates **security authentication, conflict quarantine, and safe message handling hardening**:
+- Cryptographic authentication of event producers and reviewer identity screening.
+- Immediate quarantine of conflicting reference examples to prevent corrupted historical evidence from skewing agent reliability scoring.
+- Synchronous dead-letter queue (DLQ) acknowledgement before committing Kafka offsets to ensure zero message loss.
+
 ---
 
 ## 2. Hexagonal / Clean Architecture Boundaries
 
 The implementation strictly maintains Hexagonal Architecture boundaries:
 
-- **Domain Layer (`domain/`)**: Defines `HumanResolutionEvent` entity, `HumanResolutionStatus` lifecycle outcomes, and domain exceptions (`EventValidationError`, `UnsupportedEventVersionError`, `UnreviewedAgentDecisionError`, `ConflictingHumanResolutionError`). It contains zero dependencies on databases, messaging brokers, or external frameworks.
+- **Domain Layer (`domain/`)**:
+  - `HumanResolutionEvent` entity with `producer_id` and `producer_token`.
+  - `HumanResolutionStatus` lifecycle outcomes (including `QUARANTINED`).
+  - Valid statuses in `ReferenceExample`: `active`, `archived`, `pending`, `quarantined`, `disputed`.
+  - Domain exceptions: `UnauthorizedProducerError`, `UnauthorizedReviewerError`, `DLQPublicationError`, `EventValidationError`, `UnsupportedEventVersionError`, `UnreviewedAgentDecisionError`, `ConflictingHumanResolutionError`.
+  - Contains zero dependencies on databases, messaging brokers, or external frameworks.
 - **Application Layer (`application/`)**:
-  - `ports/`: Declares abstract interfaces `HumanFeedbackRepositoryPort` and `EmbeddingProviderPort`.
-  - `use_cases/`: Implements `IngestHumanFeedbackUseCase`, orchestrating schema normalization, duplicate checks, conflict detection, single-passage embedding generation, and atomic persistence.
+  - `ports/`: Declares abstract interfaces `HumanFeedbackRepositoryPort`, `EmbeddingProviderPort`, and `EventAuthorizerPort`.
+  - `use_cases/`: Implements `IngestHumanFeedbackUseCase`, orchestrating producer/reviewer authorization, schema normalization, duplicate checks, conflict quarantine, single-passage embedding generation, and atomic persistence.
 - **Infrastructure Layer (`infrastructure/`)**:
-  - `messaging/`: Implements `RedpandaFeedbackConsumer` using `aiokafka`, `HumanResolutionEventDTO` validation using Pydantic, and `ConsumerMetrics`.
-  - `database/`: Implements `PgHumanFeedbackRepository` and SQLAlchemy model `HumanFeedbackEventModel` with migration `0002_create_human_feedback_events_table.py`.
+  - `messaging/`: Implements `RedpandaFeedbackConsumer` using `aiokafka`, `TrustedProducerAuthorizer` for HMAC verification and reviewer screening, `HumanResolutionEventDTO` validation using Pydantic, and `ConsumerMetrics`.
+  - `database/`: Implements `PgHumanFeedbackRepository` and SQLAlchemy models `ReferenceExampleModel` and `HumanFeedbackEventModel` with migrations.
   - `embedding/`: Implements `SentenceTransformerEmbeddingAdapter` using `BAAI/bge-small-en-v1.5`.
 
 ---
 
-## 3. Versioned Event Contract (`arda.human-resolutions.v1`)
+## 3. Trusted Producer Authentication & Reviewer Authorization Boundary
+
+```
++------------------------------------+          +-----------------------------------------+
+| Upstream Review Service / Gateway  |          |       Reliability Service Ingress       |
+|                                    |          |                                         |
+| [Human Reviewer Session]           |          | [TrustedProducerAuthorizer]             |
+|   - Authenticates reviewer         |          |   1. Whitelist: producer_id in Set      |
+|   - Evaluates RBAC (RoleReviewer)  |          |   2. Crypto: HMAC timing-safe compare   |
+|   - Signs event with shared secret |          |   3. Screen: reject bot/forged patterns |
+|                                    |          |                                         |
++-----------------+------------------+          +--------------------+--------------------+
+                  |                                                  |
+                  +---- Redpanda Event (with producer_token) --------+
+```
+
+### 3.1 Producer Authentication
+- **Producer Whitelist**: The consumer verifies `producer_id` against configured trusted services (`redpanda_trusted_producers` default: `arda.human-review-service`, `arda.gateway.review-worker`, `arda.workflow-engine`).
+- **Cryptographic Token Verification**: The authorizer verifies `producer_token` against `redpanda_producer_secret` using constant-time `hmac.compare_digest` to prevent timing attacks.
+- **Enforcement Toggle**: Controlled via `redpanda_enforce_producer_auth` (enabled by default).
+
+### 3.2 Reviewer Authorization & Identity Screening
+- **Screening Rules**: Events with missing, empty, or whitespace `reviewer_id` are rejected immediately.
+- **Bot / Forgery Defense**: Reviewer identities matching forbidden patterns (e.g. `anonymous`, `unauthorized`, `bot`, `system`, `automated`, `unknown`, `none`) are rejected with `UnauthorizedReviewerError` and routed to DLQ.
+- **External Reviewer-Directory Dependency (Boundary Delegation)**:
+  - The Go Agent Runtime gateway enforces role-based access control (`RoleReviewer`) when human adjudicators submit reviews.
+  - Because no external reviewer-directory network RPC exists for asynchronous cross-service tenant membership validation, the Reliability Service delegates reviewer tenant-membership RBAC to the upstream producer boundary.
+  - Upstream review workers must authenticate human reviewers and guarantee tenant alignment before publishing events with valid producer credentials.
+
+---
+
+## 4. Versioned Event Contract (`arda.human-resolutions.v1`)
 
 ### Schema Specification
 ```json
@@ -79,6 +120,14 @@ The implementation strictly maintains Hexagonal Architecture boundaries:
       "minLength": 1,
       "description": "Identifier of the human reviewer (e.g. employee ID or badge)."
     },
+    "producer_id": {
+      "type": "string",
+      "description": "Identifier of the publishing producer service."
+    },
+    "producer_token": {
+      "type": "string",
+      "description": "Authentication token proving authorized producer boundary."
+    },
     "resolved_at": {
       "type": "string",
       "format": "date-time",
@@ -105,55 +154,88 @@ The implementation strictly maintains Hexagonal Architecture boundaries:
 }
 ```
 
-### Producer and Consumer Responsibilities
-- **Producer (Go Human Review Workflow / Gateway)**: Emits event to Redpanda topic `arda.human-resolutions.v1` only after human sign-off is completed. Sets `human_decision` strictly to `APPROVE` or `REJECT`. Never emits unreviewed or speculative events.
-- **Consumer (Python Reliability Service)**: Subscribes with consumer group `arda-reliability-feedback-group`. Manually commits offsets only after atomic database commit or dead-letter queue routing.
+---
+
+## 5. Conflict Quarantine & Reference Lifecycle State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> NewCase: Authoritative Event Received
+    NewCase --> Active: First Decision (APPROVE / REJECT)
+    
+    Active --> Active: Duplicate Event with Matching Label
+    Active --> Quarantined: Conflicting Human Decision Received
+    
+    Quarantined --> Quarantined: Subsequent Duplicate Event (Ignored, never reactivated)
+    Quarantined --> [*]: Excluded from Vector Retrieval
+```
+
+### 5.1 Conflict Quarantine Guarantees
+1. **Immediate Quarantine**: When a case previously resolved with `APPROVE` receives `REJECT` (or vice-versa), `reference_examples.status` is atomically transitioned to `"quarantined"`.
+2. **Metadata Audit Preservation**: The conflicting adjudication details (`existing_label`, `new_label`, `reviewer_id`, `quarantined_at`, `reason`) are merged into the reference's `metadata` JSONB column.
+3. **Audit Trail Completeness**: Both the original event and the conflicting resolution event are preserved in `human_feedback_events` (`status='PROCESSED'` and `status='CONFLICT'`).
+4. **Retrieval Exclusion**: In `PgVectorReferenceExampleRepository`, exact and HNSW cosine retrieval queries enforce `WHERE status = 'active'`. Quarantined examples are completely invisible to vector search and cannot contribute evidence to agent reliability evaluations.
+5. **Reactivation Prevention**: Subsequent deliveries of duplicate events (either matching the initial label or the opposing label) check `existing_reference.status in {'quarantined', 'disputed'}` and immediately return `IDEMPOTENT_DUPLICATE` without reactivating the reference to `active`.
+6. **Concurrent Race Protection**: If two opposing events race into the database concurrently, PostgreSQL's `ON CONFLICT DO NOTHING` on `(tenant_id, agent_id, example_id)` allows one insert to succeed while the second transaction detects `rowcount == 0`, identifies the opposing label on the newly committed row, and executes `record_conflict()`, ensuring safe quarantine without split-brain.
 
 ---
 
-## 4. End-to-End Sequence Diagram
+## 6. End-to-End Sequence Diagram
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Producer as Go Agent Runtime / Human Review
+    participant Producer as Go Review Worker (Trusted Producer)
     participant Topic as Redpanda (arda.human-resolutions.v1)
     participant Consumer as RedpandaFeedbackConsumer
+    participant Auth as TrustedProducerAuthorizer
     participant UseCase as IngestHumanFeedbackUseCase
     participant Model as BGE-small Embedder
     participant DB as PostgreSQL 16 (pgvector)
     participant DLQ as Redpanda DLQ (arda.human-resolutions.dlq)
 
-    Producer->>Topic: Publish HumanResolutionEvent (JSON)
+    Producer->>Topic: Publish HumanResolutionEvent (JSON + token)
     Consumer->>Topic: Fetch next message (auto_commit=False)
     
     alt JSON Malformed or Schema Invalid
-        Consumer->>DLQ: Route to DLQ (error_type, metadata)
-        Consumer->>Topic: Commit offset
-    else Valid Event
-        Consumer->>UseCase: execute(event_dto)
-        UseCase->>DB: Check event_id in human_feedback_events
-        alt Event ID Already Processed
-            UseCase-->>Consumer: IDEMPOTENT_DUPLICATE
-            Consumer->>Topic: Commit offset
-        else New Event ID
-            UseCase->>DB: Check case_id in reference_examples
-            alt Case Exists with Matching Label
-                UseCase->>DB: Record duplicate event in human_feedback_events
+        Consumer->>DLQ: Publish to DLQ (send_and_wait)
+        DLQ-->>Consumer: Broker ACK
+        Consumer->>Topic: Commit message offset
+    else Valid JSON Schema
+        Consumer->>Auth: authorize_event(event)
+        alt Unauthorized Producer or Forged Reviewer
+            Auth-->>Consumer: UnauthorizedProducerError / UnauthorizedReviewerError
+            Consumer->>DLQ: Publish to DLQ (send_and_wait)
+            DLQ-->>Consumer: Broker ACK
+            Consumer->>Topic: Commit message offset
+        else Authorization Passed
+            Consumer->>UseCase: execute(event_dto)
+            UseCase->>DB: Check event_id in human_feedback_events
+            alt Event ID Already Processed
                 UseCase-->>Consumer: IDEMPOTENT_DUPLICATE
-                Consumer->>Topic: Commit offset
-            else Case Exists with Conflicting Label
-                UseCase->>DB: Record conflict in human_feedback_events (status=CONFLICT)
-                Note over UseCase,DB: DO NOT overwrite existing reference!
-                UseCase-->>Consumer: CONFLICT
-                Consumer->>Topic: Commit offset
-            else New Case
-                UseCase->>Model: generate_embedding(original_case_description, is_query=False)
-                Model-->>UseCase: 384-dim normalized vector
-                UseCase->>DB: Atomic INSERT into reference_examples AND human_feedback_events
-                DB-->>UseCase: Transaction Committed
-                UseCase-->>Consumer: PROCESSED (reference_created=True)
-                Consumer->>Topic: Commit offset
+                Consumer->>Topic: Commit message offset
+            else New Event ID
+                UseCase->>DB: Check case_id in reference_examples
+                alt Case Already Quarantined
+                    UseCase->>DB: Record duplicate event in human_feedback_events
+                    UseCase-->>Consumer: IDEMPOTENT_DUPLICATE (stays quarantined)
+                    Consumer->>Topic: Commit message offset
+                else Case Exists with Matching Label
+                    UseCase->>DB: Record duplicate event in human_feedback_events
+                    UseCase-->>Consumer: IDEMPOTENT_DUPLICATE
+                    Consumer->>Topic: Commit message offset
+                else Case Exists with Conflicting Label
+                    UseCase->>DB: Quarantine reference (status='quarantined') & record CONFLICT event
+                    UseCase-->>Consumer: CONFLICT
+                    Consumer->>Topic: Commit message offset
+                else New Case
+                    UseCase->>Model: generate_embedding(original_case_description, is_query=False)
+                    Model-->>UseCase: 384-dim normalized vector
+                    UseCase->>DB: Atomic INSERT into reference_examples AND human_feedback_events
+                    DB-->>UseCase: Transaction Committed
+                    UseCase-->>Consumer: PROCESSED (reference_created=True)
+                    Consumer->>Topic: Commit message offset
+                end
             end
         end
     end
@@ -161,34 +243,19 @@ sequenceDiagram
 
 ---
 
-## 5. Reference Example Lifecycle Rules
+## 7. Kafka Offset Safety & DLQ Reliability Guarantees
 
-1. **Authoritative Human Decisions Only**: Only human adjudications (`APPROVE` or `REJECT`) can create or update reference examples. Unreviewed proposals are unconditionally rejected.
-2. **Embedding Invariant**: Only `original_case_description` is passed to the embedding provider with `is_query=False`. Under no circumstances are proposed decisions, labels, rationales, reviewer identities, or evaluation results concatenated into the embedded text.
-3. **Tenant & Agent Partitioning**: All queries, uniqueness constraints, and writes enforce strict scoping by `tenant_id` and `agent_id`.
-4. **No Silent Overwrite / Conflict Policy**: If an authoritative resolution arrives for a `case_id` that already exists with an opposing label:
-   - A `CONFLICT` audit record is stored in `human_feedback_events` capturing both labels and reviewer metadata.
-   - Structured warning logs and Prometheus conflict counters are emitted.
-   - The existing `reference_examples` record is preserved without silent overwrite.
-
----
-
-## 6. Idempotency & Delivery Guarantees
-
-- **Delivery Guarantee**: At-least-once delivery over Redpanda/Kafka transport.
-- **Effectively-Once Processing**: Achieved via multi-tier database uniqueness:
-  - `idx_human_feedback_events_event_id`: Unique index on `event_id` prevents duplicate processing attempts.
-  - `uq_reference_examples_tenant_agent_example_id`: Compound unique constraint on `(tenant_id, agent_id, example_id)` guarantees single representation per case.
-  - Concurrent duplicate deliveries are serialized by transaction-level row locks and unique constraint violations, gracefully returning `IDEMPOTENT_DUPLICATE`.
-
----
-
-## 7. Reliability, Recovery, and Dead-Letter Queue (DLQ)
-
-- **Manual Offset Commits**: Consumer runs with `enable_auto_commit=False`. An offset is committed if and only if the event was durably committed to PostgreSQL or successfully routed to the DLQ.
-- **Transient Error Retry**: Transient database connection issues or embedding timeouts trigger bounded exponential backoff (`redpanda_max_retries=3`, `retry_backoff_base=0.5s`).
-- **Poison Message Isolation**: Non-recoverable malformed JSON, schema violations, or exhausted retries are published to `arda.human-resolutions.dlq` with failure diagnostics before advancing consumer offsets.
-- **Partial Failure Prevention**: Embedding generation occurs before database transaction initiation. If embedding fails, no database transaction is opened and no corrupted reference example is stored.
+1. **Broker Acknowledged DLQ Delivery**:
+   - `_send_to_dlq` synchronously awaits broker acknowledgement via `await producer.send_and_wait(...)`.
+   - If DLQ publication succeeds, `process_single_message` returns `True`, allowing `_commit_message_offset` to run.
+   - If DLQ publication fails (e.g. broker timeout), `process_single_message` returns `False`, and the original message offset is **NEVER** committed.
+2. **Crash Recovery & Idempotency on Redelivery**:
+   - If the consumer crashes after writing to DLQ but before committing the offset, the broker redelivers the message upon restart.
+   - The redelivered poison message is routed to DLQ again and acknowledged, safely advancing the offset without data loss or pipeline stalling.
+3. **Sequential Partition Processing**:
+   - Partitions are consumed sequentially per worker loop iteration. Offsets are committed monotonically in strict message order, preventing offset skipping.
+4. **Graceful Shutdown Invariant**:
+   - When cancellation occurs during consumer shutdown, in-flight processing tasks are cancelled before `_commit_message_offset` is invoked. Unfinished messages remain uncommitted and are safely resumed on subsequent restart.
 
 ---
 
@@ -220,37 +287,31 @@ Creates table `human_feedback_events`:
   - `events_received`: Total messages pulled from Redpanda.
   - `events_processed`: Successfully handled messages.
   - `duplicate_events`: Idempotent duplicates skipped.
-  - `invalid_events`: Malformed JSON or schema rejections.
+  - `invalid_events`: Malformed JSON or authorization rejections.
   - `processing_failures`: Transient processing exceptions.
   - `embedding_failures`: Vector generation failures.
   - `reference_examples_created`: New reference examples persisted.
-  - `conflicting_resolutions`: Conflicting human adjudications detected.
-  - `dead_lettered_events`: Messages routed to DLQ.
+  - `conflicting_resolutions`: Conflicting human adjudications quarantined.
+  - `dead_lettered_events`: Messages successfully routed to DLQ.
   - `avg_latency_ms`: Processing latency average.
 - **Privacy & PII Protection**: Log output deliberately omits raw case descriptions, reviewer credentials, and tokens. Logs record only `event_id`, `tenant_id`, `agent_id`, `case_id`, `status`, and `latency_ms`.
 
 ---
 
-## 10. Local Development & Verification
+## 10. Verification & Quality Gates
 
-### Running the Services
 ```bash
-# Start PostgreSQL (pgvector) and Redpanda
-docker compose up -d postgres redpanda
-
-# Run Alembic migrations
-.venv/bin/alembic upgrade head
-```
-
-### Running Tests
-```bash
-# Full test suite (193 tests)
+# Run complete test suite (208 tests)
 .venv/bin/pytest tests/ -v
 
-# Human feedback ingestion tests (15 verification scenarios)
-.venv/bin/pytest tests/test_human_feedback_ingestion.py -v
+# Run the 15 security and conflict hardening scenarios
+.venv/bin/pytest tests/test_human_feedback_security_and_conflict.py -v
 
-# Real Redpanda integration test
-.venv/bin/pytest tests/test_redpanda_real_integration.py -v
+# Code quality checks
+.venv/bin/ruff check src tests scripts research
+.venv/bin/ruff format --check src tests scripts research
+.venv/bin/mypy src tests
+
+# Go interoperability tests
+cd /home/aswin/second-project/arda && go test ./...
 ```
-

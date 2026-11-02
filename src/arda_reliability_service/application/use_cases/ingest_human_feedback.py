@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from uuid import UUID
 
 from arda_reliability_service.application.ports.embedding_provider import (
     EmbeddingProviderPort,
+)
+from arda_reliability_service.application.ports.event_authorizer import (
+    EventAuthorizerPort,
 )
 from arda_reliability_service.application.ports.human_feedback_repository import (
     HumanFeedbackRepositoryPort,
@@ -56,9 +59,11 @@ class IngestHumanFeedbackUseCase:
         self,
         repository: HumanFeedbackRepositoryPort,
         embedding_provider: EmbeddingProviderPort,
+        authorizer: EventAuthorizerPort | None = None,
     ) -> None:
         self.repository = repository
         self.embedding_provider = embedding_provider
+        self.authorizer = authorizer
 
     def _normalize_event(
         self, event_input: HumanResolutionEvent | dict[str, Any] | Any
@@ -115,6 +120,14 @@ class IngestHumanFeedbackUseCase:
                     reviewer_id=str(event_input["reviewer_id"]),
                     resolved_at=resolved_at,
                     correlation_id=str(event_input.get("correlation_id", "")),
+                    producer_id=str(
+                        event_input.get("producer_id", "arda.human-review-service")
+                    ),
+                    producer_token=str(
+                        event_input.get(
+                            "producer_token", "arda-producer-secret-default"
+                        )
+                    ),
                 )
             except KeyError as ke:
                 raise EventValidationError(f"Missing required field: {ke}") from ke
@@ -139,6 +152,10 @@ class IngestHumanFeedbackUseCase:
         """
         # 1. Validation & Domain Normalization
         event = self._normalize_event(event_input)
+
+        # 1b. Producer & Reviewer Authorization
+        if self.authorizer is not None:
+            self.authorizer.authorize_event(event)
 
         # 2. Idempotency Check on Event ID
         existing_event = await self.repository.get_processed_event(event.event_id)
@@ -167,7 +184,25 @@ class IngestHumanFeedbackUseCase:
         )
 
         if existing_reference is not None:
-            # Check for conflict vs duplicate
+            # Case is already quarantined due to prior conflict
+            if existing_reference.status in {"quarantined", "disputed"}:
+                logger.info(
+                    "Case %s is already quarantined; recording duplicate event_id=%s without altering quarantine status",
+                    event.case_id,
+                    event.event_id,
+                )
+                await self.repository.record_duplicate(event)
+                return IngestHumanFeedbackResult(
+                    event_id=event.event_id,
+                    outcome=HumanFeedbackIngestionOutcome.IDEMPOTENT_DUPLICATE,
+                    case_id=event.case_id,
+                    tenant_id=event.tenant_id,
+                    agent_id=event.agent_id,
+                    message=f"Case {event.case_id} is quarantined due to prior conflict; reference remains excluded from retrieval.",
+                    reference_created=False,
+                )
+
+            # Check for matching label vs conflict
             if existing_reference.label == event.human_decision:
                 logger.info(
                     "Case %s already exists with matching label '%s'; recording duplicate event_id=%s",
@@ -186,16 +221,18 @@ class IngestHumanFeedbackUseCase:
                     reference_created=False,
                 )
 
-            # Conflicting resolution detected!
+            # Conflicting resolution detected! Quarantine the reference example
             conflict_details = {
                 "existing_label": existing_reference.label,
                 "new_label": event.human_decision,
                 "existing_source": existing_reference.source,
                 "case_id": event.case_id,
                 "reviewer_id": event.reviewer_id,
+                "quarantined_at": datetime.now(UTC).isoformat(),
+                "reason": "Conflicting authoritative human adjudications",
             }
             logger.warning(
-                "Conflicting human resolution detected for case %s: existing=%s, new=%s, event_id=%s",
+                "Conflicting human resolution detected for case %s: existing=%s, new=%s, event_id=%s. Quarantining reference.",
                 event.case_id,
                 existing_reference.label,
                 event.human_decision,
@@ -215,7 +252,7 @@ class IngestHumanFeedbackUseCase:
                 message=(
                     f"Conflicting resolution detected: case {event.case_id} has existing "
                     f"label '{existing_reference.label}', but event proposes '{event.human_decision}'. "
-                    "Existing reference was not overwritten."
+                    "Case quarantined and excluded from retrieval."
                 ),
                 reference_created=False,
                 conflict_details=conflict_details,
@@ -253,7 +290,38 @@ class IngestHumanFeedbackUseCase:
         )
 
         # 6. Atomically Persist Reference and Audit Event Record
-        await self.repository.save_reference_and_event(event=event, reference=reference)
+        created = await self.repository.save_reference_and_event(
+            event=event, reference=reference
+        )
+
+        if not created:
+            existing_ref = await self.repository.get_reference_example(
+                tenant_id=event.tenant_id,
+                agent_id=event.agent_id,
+                case_id=event.case_id,
+            )
+            if existing_ref is not None and existing_ref.status in {
+                "quarantined",
+                "disputed",
+            }:
+                return IngestHumanFeedbackResult(
+                    event_id=event.event_id,
+                    outcome=HumanFeedbackIngestionOutcome.CONFLICT,
+                    case_id=event.case_id,
+                    tenant_id=event.tenant_id,
+                    agent_id=event.agent_id,
+                    message=f"Concurrent conflict detected; case {event.case_id} was quarantined.",
+                    reference_created=False,
+                )
+            return IngestHumanFeedbackResult(
+                event_id=event.event_id,
+                outcome=HumanFeedbackIngestionOutcome.IDEMPOTENT_DUPLICATE,
+                case_id=event.case_id,
+                tenant_id=event.tenant_id,
+                agent_id=event.agent_id,
+                message=f"Concurrent duplicate detected for case {event.case_id}.",
+                reference_created=False,
+            )
 
         logger.info(
             "Successfully ingested human resolution: event_id=%s, case_id=%s, label=%s, tenant_id=%s",

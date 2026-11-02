@@ -32,7 +32,17 @@ class HumanFeedbackRepositoryPort(ABC):
         existing_label: str,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Record a conflicting human resolution without overwriting existing reference."""
+        """Record a conflicting human resolution and quarantine existing reference example without overwriting its label."""
+
+    @abstractmethod
+    async def quarantine_reference_example(
+        self,
+        tenant_id: UUID,
+        agent_id: UUID,
+        case_id: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Mark an existing reference example as quarantined and exclude it from retrieval."""
 
     @abstractmethod
     async def record_duplicate(
@@ -46,7 +56,7 @@ class HumanFeedbackRepositoryPort(ABC):
         self,
         event: HumanResolutionEvent,
         reference: ReferenceExample,
-    ) -> None:
+    ) -> bool:
         """Atomically persist a new reference example and its originating event record."""
 
     @abstractmethod
@@ -61,4 +71,3 @@ class HumanFeedbackRepositoryPort(ABC):
     @abstractmethod
     async def delete_all_for_agent(self, tenant_id: UUID, agent_id: UUID) -> int:
         """Delete all feedback events and reference examples for an agent (primarily for testing)."""
-
