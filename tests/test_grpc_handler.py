@@ -143,6 +143,48 @@ class TestReliabilityGateHandlerUnit:
         assert resp.confidence == 0.79
 
     @pytest.mark.asyncio
+    async def test_gate_response_confidence_is_raw_score_even_when_calibrated(
+        self, handler: ReliabilityGateHandler, mock_use_case: AsyncMock
+    ) -> None:
+        """Verify field 1 confidence in GateResponse remains raw_score and is never overwritten by calibrated_confidence."""
+        tenant_id = uuid4()
+        agent_id = uuid4()
+
+        mock_use_case.execute.return_value = ReliabilityEvaluationResult(
+            decision=GateDecision.PASS,
+            proposed_decision="APPROVE",
+            raw_score=0.68,
+            calibrated_confidence=0.94,
+            is_calibrated=True,
+            calibration_version="platt-v1.0.0-seed100",
+            agreement=1.0,
+            density_factor=0.8,
+            coverage_factor=0.99,
+            evidence_count=3,
+            matching_evidence_count=3,
+            conflicting_evidence_count=0,
+            evaluation_reason="Reliability threshold met",
+            reason_code=EvaluationReasonCode.RELIABILITY_THRESHOLD_MET.value,
+            threshold_used=0.65,
+            retrieved_evidence=[],
+        )
+
+        req = reliability_pb2.GateRequest(
+            tenant_id=str(tenant_id),
+            agent_id=str(agent_id),
+            case_description="Valid claim with precedent evidence.",
+            proposed_decision="APPROVE",
+        )
+        ctx = FakeServicerContext()
+
+        resp = await handler.Gate(req, ctx)  # type: ignore[arg-type]
+
+        assert not ctx.aborted
+        # Field 1 'confidence' must strictly reflect raw_score (0.68), preserving contract stability
+        assert resp.confidence == 0.68
+        assert resp.confidence != 0.94
+
+    @pytest.mark.asyncio
     async def test_escalate_response_maps_to_review_required(
         self, handler: ReliabilityGateHandler, mock_use_case: AsyncMock
     ) -> None:

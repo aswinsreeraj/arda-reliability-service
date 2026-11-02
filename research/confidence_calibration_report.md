@@ -1,6 +1,6 @@
 # ARDA Reliability Service — Confidence Calibration and Predictive Evaluation Report
 
-**Document Version**: 1.0.0  
+**Document Version**: 2.0.0 (Post-Audit Methodology Correction)  
 **Status**: Completed & Verified  
 **Milestone**: Development Week 4 — Confidence Calibration & Evaluation  
 **Author**: Senior ML Research Engineer (Predictive Gating & Confidence Systems)  
@@ -19,13 +19,13 @@ $$P(\text{agent decision is correct} \mid \text{raw\_reliability\_score} = s)$$
 ### 1.2 Definitive Research Verdict
 > [!CAUTION]
 > **Operational Conclusion: Production Calibration Must Be Postponed.**  
-> On the current 100-example synthetic seed reference dataset ($N=100$), **the raw reliability score does not exhibit sufficient global discrimination against decision correctness to support operational calibration** ($\text{ROC-AUC} = 0.5385$ under group exclusion; $\text{ROC-AUC} = 0.5045$ under standard leave-one-out).
+> On the 100-example synthetic seed reference dataset ($N=100$), **the raw reliability score does not exhibit sufficient global discrimination against decision correctness to support operational calibration** ($\text{ROC-AUC} = 0.5352$ under strict 5-fold partitioned cross-validation).
 > 
-> When calibration models are fitted using strict 5-fold Stratified Group Cross-Validation:
-> 1. **Platt Scaling** collapses all predictions into a narrow, uninformative probability band between $0.4747$ and $0.5564$ (centered on prior mean $0.50$). While its Brier score improves from $0.3758$ to $0.2495$, this is mathematically equivalent to predicting a constant coin flip ($p = 0.50$, theoretical $\text{Brier} = 0.2500$).
-> 2. **Isotonic Regression** severely overfits step functions on small sample partitions, leading to high out-of-fold log loss ($0.8697$ vs $0.6921$ for Platt).
+> Under strict 5-fold partitioned cross-validation with connected-group assignment:
+> 1. **Platt Scaling (OOF)** collapses all predictions into a narrow, uninformative probability band between $0.4813$ and $0.5465$ (centered on the empirical prior mean $0.50$). While its Brier score is $0.2499$ and log loss is $0.6929$, this is statistically indistinguishable from a trivial coin-flip baseline ($p = 0.50$, theoretical $\text{Brier} = 0.2500$, $\text{LogLoss} = \ln(2) \approx 0.6931$).
+> 2. **Isotonic Regression (OOF)** achieves $\text{ROC-AUC} = 0.5254$, $\text{Brier} = 0.2507$, and $\text{LogLoss} = 0.6937$, failing to provide any ranking or probability discrimination beyond the uncalibrated baseline.
 > 
-> **Recommendation**: We must not manufacture ungrounded confidence claims based solely on $N=100$ synthetic examples. The platform must maintain its existing multi-factor gate policy (`PASS` vs `ESCALATE`) and postpone production confidence calibration until an independently labelled operational dataset of at least $N \ge 1,000$ to $5,000$ dispute decisions is collected.
+> **Operational Policy Decision**: We must not manufacture ungrounded confidence claims based solely on $N=100$ synthetic examples. The platform must maintain its existing multi-factor gate policy (`PASS` vs `ESCALATE`) driven strictly by the decomposed reliability scoring engine, and **postpone production confidence calibration until an independently labelled operational dataset of at least $N \ge 1,000$ to $5,000$ real dispute adjudications is collected**.
 > 
 > However, the **Calibration Architecture** (`CalibratorPort`, `PlattCalibrator`, `IsotonicCalibrator`, `UnavailableCalibrator`) has been implemented as a modular domain/application component so that when a suitably sized operational dataset becomes available, calibration models can be deployed without architectural changes.
 
@@ -49,8 +49,8 @@ The preliminary evaluation was conducted on the audited synthetic reference seed
 ### 2.2 Methodological Limitations of the 100-Example Seed Dataset
 1. **Finite Sample Size**:
    With only 100 examples across 5 distinct case categories and 10 merchant categories, each sub-cohort contains only 20 examples (10 `APPROVE`, 10 `REJECT`). In 5-fold cross-validation, each validation fold contains only 4 examples per cohort.
-2. **Effective Precedent Population ($N=90$ Independent Entities)**:
-   Because 20 examples belong to 10 contrastive pairs, the candidate pool contains only 90 independent factual dispute narratives.
+2. **Effective Precedent Population ($N=90$ Connected Groups)**:
+   Because 20 examples belong to 10 contrastive pairs (twins), the candidate pool contains only 90 independent factual dispute narratives.
 3. **Synthetic Generative Prior**:
    While the dataset passed independent semantic audit for procedural dispute policy rules, it lacks the empirical noise, language drift, merchant dispute notes, and chargeback arbitration records of live banking operations.
 
@@ -77,61 +77,78 @@ The evaluation enforces clear separation between four distinct concepts:
 > [!IMPORTANT]
 > `PASS` is never treated as proof of correctness. `ESCALATE` is never treated as proof of incorrectness.
 
-### 3.3 Data Leakage Prevention Strategy
-1. **Self-Retrieval Exclusion**:
-   An evaluation query $i$ is strictly forbidden from retrieving candidate $i$ from the reference index ($s_{i,i} = -\infty$).
-2. **Contrastive Pair Group Isolation**:
-   Every contrastive twin shares an identical `group_id` (`cp-01` through `cp-10`). In cross-validation, `StratifiedGroupKFold` guarantees that both twins of a contrastive pair reside in the same fold. When Fold $k$ is being tested, neither twin can exist in the reference pool $R_k$.
-3. **Group-Exclusion LOO Protocol**:
-   Under group-exclusion leave-one-out, when evaluating query $i$, all candidates sharing $i$'s `group_id` are masked to $-\infty$. This eliminates counterfactual twin contamination across the evaluation boundary.
-4. **Strict Embedding Boundary**:
-   Only `case_description` (specifically `ratio_verbalized_description`) is embedded via `SentenceTransformerEmbeddingAdapter`. The proposed decision, true label, rationale, and correctness target are **never embedded**.
+### 3.3 Connected-Group Assignment and Partitioned Cross-Validation
+To guarantee zero data leakage between training and evaluation folds, we implemented strict **Connected-Group Assignment**:
+- **Contrastive Pairs**: The 10 contrastive pairs contain two original cases (twins) whose descriptions are nearly identical but have opposing true labels. Each pair constitutes a single connected group (`pair_01_filing_timeline` through `pair_10_restocking_fee_disclosure`).
+- **Singleton Cases**: The 80 non-contrastive examples each form a singleton connected group.
+- **Total Connected Groups**: Exactly 90 connected groups.
+- **5-Fold Partitioning**: The 90 groups are deterministically partitioned into 5 balanced folds ($K=5$):
+  - Each fold contains exactly **18 connected groups** (2 contrastive pairs + 16 singletons).
+  - Each fold contains exactly **20 original cases** ($2 \times 2 + 16 \times 1$).
+  - Each fold contains exactly **40 evaluation queries** ($20 \times 2$, 20 correct and 20 incorrect).
+  - Total across 5 folds: $5 \times 18 = 90$ groups, $5 \times 20 = 100$ cases, $5 \times 40 = 200$ queries.
+
+#### Strict Partition Invariants:
+1. **No Original Case Split**: An original case belongs to exactly one cross-validation fold.
+2. **No Contrastive Pair Split**: Both twins of any contrastive pair reside in the exact same fold.
+3. **No Proposal Counterpart Split**: Both proposed variants (`APPROVE` and `REJECT`) reside in the exact same fold.
+4. **Strict Training Reference Pool ($R_k$)**: For test fold $k$, the candidate retrieval pool consists strictly of the 80 training cases in $R_k$. Zero test cases or connected twins exist in $R_k$.
+5. **No Fitting Leakage**: Fold calibrators are fitted strictly on training fold predictions generated via leave-one-group-out within $R_k$. Held-out test fold queries are scored and calibrated strictly out-of-fold.
 
 ---
 
-## 4. Raw-Score Performance and Benchmark Results
+## 4. Benchmark Results: Partitioned Cross-Validation vs. Superseded LOO
 
-### 4.1 Comparative Calibration Matrix ($N=200$ Queries)
+### 4.1 Primary Benchmark: Partitioned 5-Fold Cross-Validation ($N=200$ Queries)
 
-All calibration models were evaluated using 5-fold Stratified Group Cross-Validation.
+All test predictions were computed strictly out-of-fold across the 5 partitioned folds:
 
-| Model / Approach | ROC-AUC | Brier Score | Log Loss | ECE (10 Bins) | MCE (Max Error) | Precision | Recall | Macro F1 |
+| Model / Approach | ROC-AUC | Brier Score | Log Loss | ECE (10 Bins) | MCE | Precision | Recall | Macro F1 |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Raw Score (Baseline)** | **0.5385** | 0.3758 | 1.0968 | 0.3586 | 0.4284 | 0.0000 | 0.0000 | 0.0000 |
-| **Platt Scaling (OOF 5-Fold)** | **0.5134** | **0.2495** | **0.6921** | **0.0508** | **0.0564** | 0.5833 | 0.2800 | 0.4884 |
-| **Isotonic Regression (OOF 5-Fold)** | **0.5323** | 0.2548 | 0.8697 | 0.0813 | 0.2500 | 0.6087 | 0.4200 | 0.4970 |
+| **Raw Score (Baseline)** | **0.5352** | 0.3858 | 1.1341 | 0.3721 | 0.4430 | 0.0000 | 0.0000 | 0.0000 |
+| **Platt Scaling (OOF 5-Fold)** | **0.5285** | **0.2499** | **0.6929** | **0.0504** | **0.0535** | 0.5632 | 0.4900 | 0.5241 |
+| **Isotonic Regression (OOF 5-Fold)** | **0.5254** | 0.2507 | 0.6937 | 0.0339 | 0.1667 | 0.5263 | 0.5000 | 0.5128 |
 | **Random Guessing Baseline ($p=0.50$)** | 0.5000 | 0.2500 | 0.6931 | 0.0000 | 0.0000 | 0.5000 | 1.0000 | 0.6667 |
 
-### 4.2 Key Observations from the Overall Benchmark
-1. **Raw Score Brier Score is Poor ($0.3758$)**:
-   Because raw scores are concentrated in $[0.05, 0.45]$ (overall mean $\approx 0.16$), raw scores heavily underestimate the 50% positive base rate, yielding an Expected Calibration Error of $0.3586$.
-2. **Platt Scaling Brier Score ($0.2495$) is a Baseline Artifact**:
-   Platt scaling achieves a Brier score of $0.2495$, which looks like an improvement over raw score ($0.3758$). However, a trivial constant predictor that always outputs $p = 0.50$ achieves $\text{Brier} = (0.5 - 1)^2 = 0.2500$. Platt scaling merely learned that the dataset is 50% positive and shrank its predictions into $[0.4747, 0.5564]$.
-3. **Discrimination Does Not Improve with Calibration**:
-   Monotonic transformations preserve or slightly degrade ranking under cross-validation. Platt OOF ROC-AUC is $0.5134$, and Isotonic OOF ROC-AUC is $0.5323$. Neither is statistically distinguishable from random guessing ($0.5000$, $p > 0.40$).
+### 4.2 Comparison with Superseded Evaluation Protocols
+
+To demonstrate why the methodology correction was essential, the table below compares the corrected partitioned cross-validation with the superseded leave-one-out protocols:
+
+| Evaluation Protocol | Retrieval Pool Size | Test Candidate Leakage Prevention | Raw ROC-AUC | Raw Brier | Platt OOF Brier | Platt OOF Range |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Superseded Standard LOO** | 99 cases | ❌ Contrastive twin present in candidate pool | 0.5045 | 0.3812 | 0.2498 | $[0.481, 0.552]$ |
+| **Superseded Group-Exclusion LOO** | 98–99 cases | ⚠️ Twin excluded, but test fold not isolated from corpus | 0.5385 | 0.3758 | 0.2495 | $[0.475, 0.556]$ |
+| **Corrected Partitioned 5-Fold CV** | **80 cases ($R_k$)** | **✅ Zero test case or twin leakage into retrieval or fitting** | **0.5352** | **0.3858** | **0.2499** | **$[0.481, 0.546]$** |
+
+#### Findings on Methodology Correction:
+1. **Contrastive Pair Contamination in Standard LOO**:
+   In standard LOO, the retrieval pool contained 99 examples. For the 20 contrastive pair examples, their counterfactual twin was retrieved at Rank 1 with $\ge 0.95$ cosine similarity but an opposing true label. This severely contaminated retrieval agreement, collapsing contrastive pair ROC-AUC to $0.1663$.
+2. **Partitioned Cross-Validation Eliminates All Leakage**:
+   Under strict partitioned cross-validation, test fold queries retrieve strictly from the 80 training cases in $R_k$. Neither the candidate nor its twin exists in $R_k$. This yields a true out-of-distribution evaluation.
+3. **Platt Compression Confirms Calibration Impossibility on $N=100$**:
+   Under all protocols, Platt scaling compresses into $[0.481, 0.546]$. The Brier score ($0.2499$) is indistinguishable from predicting a constant $0.50$ ($0.2500$). This mathematically proves that calibration must remain postponed.
 
 ---
 
 ## 5. Disaggregated Cohort Performance Analysis
 
-Global aggregate metrics hide critical differences in how different types of dispute cases behave. We disaggregated the raw score performance across the 5 case types ($N=40$ queries per cohort):
+Global aggregate metrics hide critical differences in how different types of dispute cases behave. We disaggregated the raw score performance across the 5 case types ($N=40$ queries per cohort) under partitioned cross-validation:
 
 | Case Type Cohort | Queries ($N$) | Mean Score (Correct) | Mean Score (Incorrect) | Raw ROC-AUC | Brier Score | ECE (10 Bins) |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Straightforward** | 40 | **0.1932** | 0.1171 | **0.7100** | 0.3400 | 0.3448 |
-| **Borderline** | 40 | **0.1543** | 0.1198 | **0.6050** | 0.3706 | 0.3629 |
-| **Conflicting Signals** | 40 | **0.1413** | 0.1158 | **0.5925** | 0.3796 | 0.3715 |
-| **Contrastive Pairs (Group-Exclusion)** | 40 | **0.1407** | 0.1501 | **0.4400** | 0.3875 | 0.3546 |
-| **Incomplete Evidence** | 40 | **0.1252** | 0.1564 | **0.3675** | 0.4014 | 0.3614 |
+| **Borderline** | 40 | **0.1483** | 0.0966 | **0.7000** | 0.3708 | 0.3775 |
+| **Straightforward** | 40 | **0.1574** | 0.1203 | **0.6400** | 0.3665 | 0.3611 |
+| **Incomplete Evidence** | 40 | **0.1301** | 0.1341 | **0.4587** | 0.3932 | 0.3679 |
+| **Contrastive Pairs** | 40 | **0.1251** | 0.1345 | **0.4463** | 0.3941 | 0.3702 |
+| **Conflicting Signals** | 40 | **0.1129** | 0.1193 | **0.3875** | 0.4044 | 0.3954 |
 
 ### Cohort Findings:
-1. **Straightforward Cases Show Strong Directional Separation ($\text{ROC-AUC} = 0.7100$)**:
-   In clear-cut dispute claims (e.g. carrier confirms package lost; merchant non-responsive for 14 days), the raw reliability score reliably differentiates correct agent decisions ($0.1932$) from incorrect decisions ($0.1171$).
-2. **Incomplete Evidence Inverts Scoring ($\text{ROC-AUC} = 0.3675$)**:
-   When cases lack essential evidentiary documentation (missing shipping receipts, uncorroborated cardholder assertions), retrieved neighbors are diffuse and mixed. Raw score drops for both correct and incorrect decisions.
-3. **Contrastive Pairs Require Procedural Policy Gating**:
-   Under group exclusion, contrastive pairs achieve $\text{ROC-AUC} = 0.4400$. Under standard LOO (where the counterfactual twin is in the reference pool), contrastive pair ROC-AUC collapses to **$0.1663$** because the twin with an opposing label is retrieved at Rank 1 with $\ge 0.95$ similarity!
-   This proves that **semantic similarity alone cannot resolve fine-grained policy boundaries**. The engine's procedural gate rules (Check 4: High-Similarity Conflict Veto) are essential to catch these boundary cases and force human escalation.
+1. **Procedural Cases Show Moderate Separation**:
+   In `borderline` ($\text{AUC} = 0.7000$) and `straightforward` ($\text{AUC} = 0.6400$) cases, the reliability score positively correlates with decision correctness.
+2. **Complex and Contradictory Cases Degrade Semantic Scoring**:
+   In `incomplete_evidence` ($\text{AUC} = 0.4587$), `contrastive_pair` ($\text{AUC} = 0.4463$), and `conflicting_signals` ($\text{AUC} = 0.3875$), semantic retrieval cannot distinguish correct from incorrect proposals.
+3. **Procedural Policy Rules Are Mandatory**:
+   Because semantic scoring alone inverts on conflicting signals, the procedural gate checks (e.g. Check 4: High-Similarity Conflict Veto, Check 5: Agreement Threshold) are indispensable to catch errors and mandate human review.
 
 ---
 
@@ -142,7 +159,7 @@ In selective classification and AI safety gating, two metrics determine real-wor
 - **Risk**: The empirical error rate among autonomously passed decisions ($\text{False Passes} / \text{PASS}$).
 
 ### 6.1 Performance Under Current Experimental Defaults
-Under the current developmental scoring configuration:
+Under the current scoring configuration:
 - $\tau = 0.65$ (`min_reliability_threshold`)
 - $k_{\min} = 3, s_{\min} = 0.70, c_{\min} = 0.50, d_{\min} = 0.40, a_{\min} = 0.60$
 
@@ -159,7 +176,7 @@ Because the maximum raw reliability score achieved on the 100-example dataset is
 - This guarantees **zero false passes** (complete safety against autonomous financial errors).
 - However, it provides **zero operational efficiency** (coverage = 0%).
 
-### 6.2 Empirical Risk vs. Coverage Across Varying Operating Thresholds
+### 6.2 Empirical Risk vs. Coverage Across Operating Thresholds
 
 When varying the reliability gate threshold $\tau$ from $0.05$ to $0.50$:
 
@@ -176,11 +193,11 @@ When varying the reliability gate threshold $\tau$ from $0.05$ to $0.50$:
 > **Key Finding on Selective Risk**:
 > At threshold $\tau = 0.40$, only 1 case passes (a straightforward lost-in-transit dispute), with 0% risk. However, as threshold drops to $0.30$, coverage rises to 9.0%, but risk jumps immediately to **38.89%**!
 > 
-> Because raw score separation between correct and incorrect decisions is modest ($\Delta \approx +0.02$ to $+0.07$ on straightforward cases), lowering the threshold indiscriminately admits incorrect decisions. Threshold tuning cannot be done safely on $N=100$ examples.
+> Because raw score separation between correct and incorrect decisions is modest, lowering the threshold indiscriminately admits incorrect decisions. Threshold tuning cannot be done safely on $N=100$ examples.
 
 ---
 
-## 7. Calibration Architecture and Implementation
+## 7. Calibration Architecture and Decoupling Invariants
 
 To ensure the platform is architecturally ready for future calibration without compromising current safety, a modular calibration architecture was implemented:
 
@@ -205,36 +222,20 @@ flowchart TD
     end
 ```
 
-### 7.2 Implemented Components
-
-1. **`CalibratorPort`** ([`domain/calibration.py`](file:///home/aswin/second-project/arda-reliability-service/src/arda_reliability_service/domain/calibration.py)):
-   - Defines the contract: `calibrate(raw_score: float) -> float`, `calibrate_batch(...)`.
-   - Properties: `version`, `calibrator_type`, `is_fitted`, `metrics`.
-   - Methods: `to_dict()`, `to_json()`, `from_dict()`, `from_json()`.
-2. **`PlattCalibrator`**:
-   - Logistic transformation: $P(y=1 \mid s) = 1 / (1 + \exp(-(a \cdot s + b)))$.
-   - Validates inputs strictly in $[0.0, 1.0]$.
-   - Stores version string (`platt-v1.0.0-seed100`) and evaluation metadata.
-3. **`IsotonicCalibrator`**:
-   - Monotonic piecewise linear interpolation across calibrated knot points.
-   - Enforces monotonicity check on knot initialization.
-4. **`UnavailableCalibrator`**:
-   - Explicit Null Object representing when calibration is disabled or deferred.
-   - Sets `is_fitted = False` and raises `CalibrationUnavailableError` if invoked, guaranteeing raw scores are **never silently treated as calibrated confidence**.
-5. **`ReliabilityEvaluationResult` Extension**:
-   - `raw_score: float` (remains completely unchanged).
-   - `calibrated_confidence: float | None` (populated only when a fitted calibrator is active).
-   - `is_calibrated: bool` (boolean flag).
-   - `calibration_version: str | None` (calibrator version string).
-6. **Decoupled Decision Policy**:
-   - The platform gate policy (`PASS` vs `ESCALATE`) remains strictly driven by `raw_score` and policy rules in `ReliabilityDecisionEngine`. Calibrated confidence is an observable attribute, not an operational gate override.
+### 7.2 Implemented Decoupling Invariants
+1. **Decision Engine Independence**:
+   The decision engine (`PASS` vs `ESCALATE`) and reason codes are strictly determined by `raw_score` and policy rules in `ReliabilityDecisionEngine`. Calibrator output can never override, replace, or alter the gate decision.
+2. **Explicit Unavailability**:
+   When calibration is deferred or disabled, `UnavailableCalibrator` explicitly marks `is_calibrated = False` and `calibrated_confidence = None`. Raw score is never silently disguised as calibrated confidence.
+3. **Graceful Degradation on Error**:
+   If a calibrator raises a runtime error during execution, `EvaluateReliabilityUseCase` catches the exception, logs a warning, and sets `calibrated_confidence = None` while preserving the valid raw score and gate decision.
 
 ---
 
-## 8. API and gRPC Contract Evolution
+## 8. API and gRPC Contract Semantics
 
-### 8.1 Current Contract Inspection
-In `reliability.proto`:
+### 8.1 Existing Contract Inspection (`proto/arda/v1/reliability.proto`)
+In the existing protobuf contract:
 ```protobuf
 message GateResponse {
   // Calibrated confidence, in [0.0, 1.0].
@@ -246,37 +247,38 @@ message GateResponse {
 }
 ```
 
-### 8.2 Proposed Backward-Compatible Contract Evolution
-To cleanly separate raw reliability score from calibrated confidence without breaking existing Go clients, we propose extending `GateResponse`:
+### 8.2 Strict Semantics for Existing Field 1
+To preserve contract stability for existing Go Agent Runtime clients:
+- **Field 1 `confidence` strictly outputs `result.raw_score`**.
+- It is **never silently overwritten** by experimental calibrated confidence.
+- Go clients rely on Field 1 to reflect the service's reliability evaluation. Changing Field 1's semantics would break runtime expectations.
+
+### 8.3 Proposed Backward-Compatible Contract Extension
+When production calibration is justified in the future, the contract can be extended in a 100% backward-compatible manner without altering fields 1–4:
 
 ```protobuf
 message GateResponse {
-  // Existing confidence field (Field 1):
-  // Maintained for backward compatibility. Contains calibrated confidence if a fitted
-  // calibrator is active, or raw reliability score during development/uncalibrated mode.
+  // Field 1: Stable reliability score assessment (raw_score)
   double confidence = 1;
 
   GateOutcome outcome = 2;
   string reason_code = 3;
   repeated ReferenceNeighbor neighbors = 4;
 
-  // Week 4 Proposed Backward-Compatible Extensions:
-  // Field 5: Explicit calibrated confidence in [0.0, 1.0]. Present only when a validated
-  // calibration model is active.
-  optional double calibrated_confidence = 5;
+  // Backward-Compatible Extensions (Proposed for Future Calibration Deployment):
+  // Field 5: Unambiguous raw reliability score (agreement * density * coverage)
+  optional double raw_score = 5;
 
-  // Field 6: Underlying uncalibrated raw reliability score (agreement * density * coverage).
-  optional double raw_score = 6;
+  // Field 6: Calibrated confidence estimate in [0.0, 1.0]. Present only when fitted calibrator is active.
+  optional double calibrated_confidence = 6;
 
-  // Field 7: Lineage and version identifier of the active calibration model.
-  optional string calibration_version = 7;
+  // Field 7: Flag indicating whether calibration was applied
+  bool is_calibrated = 7;
+
+  // Field 8: Version identifier of the active calibration model
+  optional string calibration_version = 8;
 }
 ```
-
-### 8.3 Compatibility Impact Analysis
-- **Field Numbers**: 5, 6, 7 (new fields in unused tags).
-- **Presence Semantics**: `optional` in proto3 syntax.
-- **Go Client Impact**: **Zero breaking changes**. Protocol Buffers binary deserializers ignore unknown tags by design. Existing Go clients that read fields 1–4 continue to function without recompilation. Upgraded Go clients can inspect `has_calibrated_confidence()` to determine whether confidence calibration was applied.
 
 ---
 
@@ -290,18 +292,17 @@ The experiment suite generated publication-quality artifacts saved under `resear
    - **Panel 3**: Selective Risk vs. Coverage Tradeoff curve.
    - **Panel 4**: Disaggregated Cohort ROC-AUC bar chart.
 2. **`research/results/confidence_calibration_results.json`**:
-   - Comprehensive machine-readable metrics for all models, cohorts, bin-level calibration data, and fitted model parameters.
+   - Comprehensive machine-readable metrics for partitioned CV, cohort-level evaluations, secondary LOO comparisons, and fitted model parameters.
 
 ---
 
 ## 10. Recommendations and Next Milestones
 
-1. **Do Not Deploy Calibrated Confidence to Production**:
-   Calibration models fitted on $N=100$ examples do not generalize. The narrow probability range ($[0.47, 0.56]$) provides no operational value over the existing multi-factor gate policy.
-2. **Preserve the Multi-Factor Gate Policy**:
-   The existing decomposed scoring engine (`agreement * density * coverage`) with procedural veto checks (Check 4: High-Similarity Conflict Veto) correctly escalates 100% of high-risk cases, providing total safety against false passes.
+1. **Maintain Calibration Postponement**:
+   Do not deploy calibration models to production. With $N=100$ examples, calibration produces no operational value over the existing multi-factor gate policy.
+2. **Preserve Multi-Factor Gate Policy**:
+   The decomposed scoring engine (`agreement * density * coverage`) with procedural veto checks (Check 4: High-Similarity Conflict Veto) correctly escalates 100% of high-risk cases, providing total safety against false passes.
 3. **Target Data Generation for Week 5**:
-   Prior to production threshold calibration, generate or collect an operational dataset of at least $N \ge 1,000$ to $5,000$ historical transaction dispute cases with human-reviewed ground truth.
+   Collect an operational dataset of at least $N \ge 1,000$ to $5,000$ historical transaction dispute cases with human-reviewed ground truth.
 4. **Recommended Next Milestone (Week 5)**:
    **Asynchronous Feedback Ingestion & Reference Example Lifecycle**: Implement Redpanda/Kafka event streaming consumers to ingest real adjudications and human review corrections, enabling continuous, data-driven calibration.
-

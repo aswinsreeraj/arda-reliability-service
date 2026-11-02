@@ -45,6 +45,7 @@ from research.calibration.metrics import (
     compute_expected_calibration_error,
 )
 from research.calibration.pipeline import (
+    ConnectedGroupAssigner,
     InstancePrediction,
     load_and_build_evaluation_instances,
 )
@@ -456,3 +457,303 @@ class TestCalibrationReproducibility:
             res1["isotonic_oof_metrics"]["brier_score"]
             == res2["isotonic_oof_metrics"]["brier_score"]
         )
+
+
+class TestConnectedGroupPartitioningAndInvariants:
+    """Verifies the connected-group assignment and cross-validation partition invariants."""
+
+    def test_connected_group_structure(self) -> None:
+        """Verify 90 connected groups: exactly 10 contrastive pairs + 80 singletons."""
+        raw_examples, _instances = load_and_build_evaluation_instances(
+            dataset_path=DATASET_PATH
+        )
+        group_map = ConnectedGroupAssigner.get_group_map(raw_examples)
+        cp_groups, singleton_groups = ConnectedGroupAssigner.get_unique_groups(
+            raw_examples
+        )
+
+        assert len(cp_groups) == 10
+        assert len(singleton_groups) == 80
+        assert len(set(group_map.values())) == 90
+
+    def test_partitioned_5_fold_cv_invariants(self) -> None:
+        """Verify 5-fold partition: 18 groups, 20 cases, 40 queries per fold, no cross-fold contamination."""
+        raw_examples, instances = load_and_build_evaluation_instances(
+            dataset_path=DATASET_PATH
+        )
+        group_map = ConnectedGroupAssigner.get_group_map(raw_examples)
+        folds_groups = ConnectedGroupAssigner.partition_groups(raw_examples, n_splits=5)
+
+        assert len(folds_groups) == 5
+
+        all_fold_groups: list[set[str]] = []
+        all_fold_cases: list[set[str]] = []
+
+        for fg in folds_groups:
+            fg_set = set(fg)
+            all_fold_groups.append(fg_set)
+
+            # 18 groups per fold (2 CPs, 16 singletons)
+            assert len(fg) == 18
+            cps = [g for g in fg if g.startswith("pair_")]
+            singletons = [g for g in fg if not g.startswith("pair_")]
+            assert len(cps) == 2
+            assert len(singletons) == 16
+
+            # 20 original cases per fold
+            fold_cases = {
+                ex["example_id"]
+                for ex in raw_examples
+                if group_map[ex["example_id"]] in fg_set
+            }
+            assert len(fold_cases) == 20
+            all_fold_cases.append(fold_cases)
+
+            # 40 evaluation queries per fold
+            fold_instances = [i for i in instances if i.group_id in fg_set]
+            assert len(fold_instances) == 40
+            assert sum(i.is_correct for i in fold_instances) == 20
+            assert sum(1 - i.is_correct for i in fold_instances) == 20
+
+        # Invariant 1: No original case appears in multiple folds
+        for i in range(5):
+            for j in range(i + 1, 5):
+                shared_cases = all_fold_cases[i].intersection(all_fold_cases[j])
+                assert len(shared_cases) == 0, (
+                    f"Case shared between fold {i} and {j}: {shared_cases}"
+                )
+                shared_groups = all_fold_groups[i].intersection(all_fold_groups[j])
+                assert len(shared_groups) == 0, (
+                    f"Group shared between fold {i} and {j}: {shared_groups}"
+                )
+
+        # Invariant 2: Union of all folds contains 100% of cases and instances
+        union_cases = set.union(*all_fold_cases)
+        assert len(union_cases) == 100
+        assert union_cases == {ex["example_id"] for ex in raw_examples}
+
+        # Invariant 3: No contrastive pair is split across folds
+        cp_examples: dict[str, list[str]] = {}
+        for ex in raw_examples:
+            cp_id = ex["metadata"].get("contrastive_pair_id")
+            if cp_id:
+                cp_examples.setdefault(cp_id, []).append(ex["example_id"])
+
+        for cp_id, twin_ids in cp_examples.items():
+            assert len(twin_ids) == 2
+            twin_folds = [
+                f_idx
+                for f_idx, fc in enumerate(all_fold_cases)
+                if twin_ids[0] in fc or twin_ids[1] in fc
+            ]
+            assert len(set(twin_folds)) == 1, (
+                f"Contrastive pair {cp_id} split across folds: {twin_folds}"
+            )
+
+        # Invariant 4: No proposal counterpart is split across folds
+        for ex in raw_examples:
+            ex_id = ex["example_id"]
+            prop_instances = [i for i in instances if i.example_id == ex_id]
+            assert len(prop_instances) == 2
+            instance_folds = [
+                f_idx
+                for f_idx, fg in enumerate(all_fold_groups)
+                if prop_instances[0].group_id in fg or prop_instances[1].group_id in fg
+            ]
+            assert len(set(instance_folds)) == 1
+
+    def test_retrieval_candidate_exclusion_in_partitioned_cv(self) -> None:
+        """Verify test fold candidates in partitioned CV strictly exclude all test fold cases and connected groups."""
+        raw_examples, _instances = load_and_build_evaluation_instances(
+            dataset_path=DATASET_PATH
+        )
+        group_map = ConnectedGroupAssigner.get_group_map(raw_examples)
+        folds_groups = ConnectedGroupAssigner.partition_groups(raw_examples, n_splits=5)
+
+        for test_fold in range(5):
+            test_groups = set(folds_groups[test_fold])
+            test_ex_ids = {
+                ex["example_id"]
+                for ex in raw_examples
+                if group_map[ex["example_id"]] in test_groups
+            }
+            train_ex_ids = {
+                ex["example_id"]
+                for ex in raw_examples
+                if group_map[ex["example_id"]] not in test_groups
+            }
+
+            assert len(test_ex_ids) == 20
+            assert len(train_ex_ids) == 80
+            # Zero overlap
+            assert len(test_ex_ids.intersection(train_ex_ids)) == 0
+
+            # For every test case, verify candidate pool R_k contains 0 test cases
+            for t_id in test_ex_ids:
+                assert t_id not in train_ex_ids
+                t_group = group_map[t_id]
+                # Any twin with same group_id must also not be in train_ex_ids
+                for ex in raw_examples:
+                    if group_map[ex["example_id"]] == t_group:
+                        assert ex["example_id"] not in train_ex_ids
+
+
+class TestCalibrationSafetyAndDecouplingInvariants:
+    """Verifies decoupling between calibration output, raw reliability scoring, and gate decision."""
+
+    @pytest.fixture
+    def mock_retrieval(self) -> AsyncMock:
+        mock = AsyncMock(spec=RetrieveReferenceExamplesUseCase)
+        mock.execute.return_value = RetrievalResultSet(
+            neighbors=[
+                ReferenceNeighbor(
+                    example_id="ref-1",
+                    label="APPROVE",
+                    source="synthetic",
+                    case_description="clean history",
+                    similarity_score=0.88,
+                ),
+                ReferenceNeighbor(
+                    example_id="ref-2",
+                    label="APPROVE",
+                    source="synthetic",
+                    case_description="clean history",
+                    similarity_score=0.85,
+                ),
+                ReferenceNeighbor(
+                    example_id="ref-3",
+                    label="APPROVE",
+                    source="synthetic",
+                    case_description="clean history",
+                    similarity_score=0.82,
+                ),
+            ],
+            query_description="clean history",
+            top_k=3,
+            retrieval_mode="approximate",
+            execution_latency_ms=1.5,
+        )
+        return mock
+
+    @pytest.mark.asyncio
+    async def test_decision_engine_independence_from_calibration_model(
+        self, mock_retrieval: AsyncMock
+    ) -> None:
+        """Prove the PASS/ESCALATE gate decision and reason_code are strictly independent of calibration."""
+        request = ReliabilityEvaluationRequest(
+            tenant_id=UUID("00000000-0000-0000-0000-000000000001"),
+            agent_id=UUID("00000000-0000-0000-0000-000000000002"),
+            case_description="Clean history dispute",
+            proposed_decision="APPROVE",
+        )
+        config = ScoringConfig(min_similarity_threshold=0.70)
+
+        # 1. Without calibrator
+        uc_none = EvaluateReliabilityUseCase(
+            retrieval_use_case=mock_retrieval, config=config, calibrator=None
+        )
+        res_none = await uc_none.execute(request)
+
+        # 2. With high-output calibrator (outputs ~1.0)
+        high_cal = PlattCalibrator(a=10.0, b=10.0, version="high")
+        uc_high = EvaluateReliabilityUseCase(
+            retrieval_use_case=mock_retrieval, config=config, calibrator=high_cal
+        )
+        res_high = await uc_high.execute(request)
+
+        # 3. With low-output calibrator (outputs ~0.0)
+        low_cal = PlattCalibrator(a=-10.0, b=-10.0, version="low")
+        uc_low = EvaluateReliabilityUseCase(
+            retrieval_use_case=mock_retrieval, config=config, calibrator=low_cal
+        )
+        res_low = await uc_low.execute(request)
+
+        # 4. With unavailable calibrator
+        unavail = UnavailableCalibrator(reason="Model calibration deferred")
+        uc_unavail = EvaluateReliabilityUseCase(
+            retrieval_use_case=mock_retrieval, config=config, calibrator=unavail
+        )
+        res_unavail = await uc_unavail.execute(request)
+
+        # All decisions, reason codes, and raw scores must be IDENTICAL across all 4 invocations
+        assert (
+            res_none.decision
+            == res_high.decision
+            == res_low.decision
+            == res_unavail.decision
+        )
+        assert (
+            res_none.reason_code
+            == res_high.reason_code
+            == res_low.reason_code
+            == res_unavail.reason_code
+        )
+        assert (
+            res_none.raw_score
+            == res_high.raw_score
+            == res_low.raw_score
+            == res_unavail.raw_score
+        )
+
+        # Calibrated confidence reflects respective calibrator, NOT decision
+        assert res_none.is_calibrated is False
+        assert res_none.calibrated_confidence is None
+        assert res_high.is_calibrated is True
+        assert (
+            res_high.calibrated_confidence is not None
+            and res_high.calibrated_confidence > 0.99
+        )
+        assert res_low.is_calibrated is True
+        assert (
+            res_low.calibrated_confidence is not None
+            and res_low.calibrated_confidence < 0.01
+        )
+        assert res_unavail.is_calibrated is False
+        assert res_unavail.calibrated_confidence is None
+
+    @pytest.mark.asyncio
+    async def test_calibration_exception_does_not_fabricate_confidence(
+        self, mock_retrieval: AsyncMock
+    ) -> None:
+        """Prove an error during calibration never silently produces a fabricated confidence or alters the gate outcome."""
+        from unittest.mock import MagicMock
+
+        buggy_calibrator = MagicMock()
+        buggy_calibrator.is_fitted = True
+        buggy_calibrator.calibrator_type = "buggy"
+        buggy_calibrator.version = "buggy-v1"
+        buggy_calibrator.calibrate.side_effect = RuntimeError(
+            "Numerical divergence in calibrator"
+        )
+
+        uc = EvaluateReliabilityUseCase(
+            retrieval_use_case=mock_retrieval,
+            config=ScoringConfig(min_similarity_threshold=0.70),
+            calibrator=buggy_calibrator,
+        )
+
+        request = ReliabilityEvaluationRequest(
+            tenant_id=UUID("00000000-0000-0000-0000-000000000001"),
+            agent_id=UUID("00000000-0000-0000-0000-000000000002"),
+            case_description="Clean history dispute",
+            proposed_decision="APPROVE",
+        )
+
+        # Baseline without calibrator
+        uc_baseline = EvaluateReliabilityUseCase(
+            retrieval_use_case=mock_retrieval,
+            config=ScoringConfig(min_similarity_threshold=0.70),
+            calibrator=None,
+        )
+        baseline_res = await uc_baseline.execute(request)
+
+        # Execution must NOT raise; must safely log and fall back
+        res = await uc.execute(request)
+
+        assert res.raw_score > 0.0
+        assert res.raw_score == baseline_res.raw_score
+        assert res.is_calibrated is False
+        assert res.calibrated_confidence is None
+        assert res.calibration_version is None
+        assert res.decision == baseline_res.decision
+        assert res.reason_code == baseline_res.reason_code

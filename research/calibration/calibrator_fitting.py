@@ -35,6 +35,88 @@ class CalibrationEvaluator:
         self.n_splits = n_splits
         self.random_state = random_state
 
+    def evaluate_partitioned_cv(
+        self,
+        predictions: list[InstancePrediction],
+        decision_threshold: float = 0.5,
+        fitted_calibrators: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Evaluate strictly partitioned cross-validation predictions.
+
+        Expects each InstancePrediction in `predictions` to have `platt_oof` and `isotonic_oof`
+        populated directly from the partitioned cross-validation folds.
+        """
+        X_raw = np.array([p.raw_score for p in predictions], dtype=np.float64)
+        y = np.array([p.is_correct for p in predictions], dtype=np.int32)
+        gate_decisions = [p.gate_decision for p in predictions]
+
+        platt_oof = np.array(
+            [p.platt_oof if p.platt_oof is not None else 0.5 for p in predictions],
+            dtype=np.float64,
+        )
+        iso_oof = np.array(
+            [
+                p.isotonic_oof if p.isotonic_oof is not None else 0.5
+                for p in predictions
+            ],
+            dtype=np.float64,
+        )
+
+        # 1. Uncalibrated Raw Score Metrics
+        raw_metrics = calculate_metrics(
+            y_true=y,
+            y_pred_score=X_raw,
+            gate_decisions=gate_decisions,
+            decision_threshold=decision_threshold,
+        )
+
+        # 2. Platt OOF Metrics
+        platt_metrics = calculate_metrics(
+            y_true=y,
+            y_pred_score=platt_oof,
+            gate_decisions=gate_decisions,
+            decision_threshold=decision_threshold,
+        )
+
+        # 3. Isotonic OOF Metrics
+        iso_metrics = calculate_metrics(
+            y_true=y,
+            y_pred_score=iso_oof,
+            gate_decisions=gate_decisions,
+            decision_threshold=decision_threshold,
+        )
+
+        # 4. Random Guessing Baseline (predicts constant p = 0.50)
+        random_probs = np.full(len(y), 0.50, dtype=np.float64)
+        random_metrics = calculate_metrics(
+            y_true=y,
+            y_pred_score=random_probs,
+            gate_decisions=gate_decisions,
+            decision_threshold=decision_threshold,
+        )
+
+        # 5. Cohort Metrics (disaggregated across case types)
+        cohort_metrics = self.evaluate_cohorts(
+            predictions=predictions,
+            platt_oof=platt_oof,
+            iso_oof=iso_oof,
+        )
+
+        return {
+            "raw_score_metrics": raw_metrics.to_dict(),
+            "platt_oof_metrics": platt_metrics.to_dict(),
+            "isotonic_oof_metrics": iso_metrics.to_dict(),
+            "random_baseline_metrics": random_metrics.to_dict(),
+            "cohort_metrics": cohort_metrics,
+            "fitted_calibrators": fitted_calibrators or {},
+            "oof_predictions": {
+                "raw_scores": [float(x) for x in X_raw],
+                "labels": [int(l) for l in y],
+                "platt_oof": [float(p) for p in platt_oof],
+                "isotonic_oof": [float(p) for p in iso_oof],
+            },
+        }
+
     def evaluate_all(
         self,
         predictions: list[InstancePrediction],
@@ -42,14 +124,20 @@ class CalibrationEvaluator:
     ) -> dict[str, Any]:
         """Run complete comparative calibration benchmark.
 
-        Returns:
-            Dictionary containing metrics for:
-            - 'raw_score': Uncalibrated raw reliability score baseline
-            - 'platt_oof': Out-of-fold Platt scaling
-            - 'isotonic_oof': Out-of-fold Isotonic regression
-            - 'random_baseline': Uniform random baseline
-            - 'fitted_models': Fully fitted serializable calibrator artifacts
+        If predictions already contain precomputed OOF probabilities (from partitioned CV),
+        delegates to `evaluate_partitioned_cv`.
+        Otherwise, runs StratifiedGroupKFold on the supplied predictions.
         """
+        if (
+            predictions
+            and predictions[0].platt_oof is not None
+            and predictions[0].isotonic_oof is not None
+        ):
+            return self.evaluate_partitioned_cv(
+                predictions=predictions,
+                decision_threshold=decision_threshold,
+            )
+
         X_raw = np.array([p.raw_score for p in predictions], dtype=np.float64)
         y = np.array([p.is_correct for p in predictions], dtype=np.int32)
         groups = np.array([p.group_id for p in predictions])
@@ -115,7 +203,6 @@ class CalibrationEvaluator:
         )
 
         # 4. Fit production-ready versioned calibrators on complete dataset
-        # (for export and persistence)
         full_lr = LogisticRegression(C=1.0, solver="lbfgs")
         full_lr.fit(X_2d, y)
         platt_calibrator = PlattCalibrator(

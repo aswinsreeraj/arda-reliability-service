@@ -4,12 +4,16 @@
 Orchestrates:
 1. Dataset ingestion and symmetric target generation (correct = 1 if proposed == true else 0).
 2. Embedding generation via BGE-small with ratio-verbalized template.
-3. Group-exclusion LOO retrieval and decomposed reliability scoring.
-4. Stratified Group 5-fold cross-validation for out-of-fold Platt scaling and Isotonic regression.
-5. Metric computation: ROC-AUC, Brier score, Log loss, ECE, MCE, False Pass Rate, False Escalation Rate.
-6. Disaggregated cohort evaluation across the 5 case types.
-7. Machine-readable JSON export to research/results/confidence_calibration_results.json.
-8. Publication-quality figure generation to research/results/reliability_diagram.png.
+3. Strict 5-fold partitioned cross-validation:
+   - 90 connected groups (10 contrastive pairs + 80 singletons).
+   - Exactly 18 groups, 20 cases, 40 queries per fold.
+   - Retrieval candidate pool strictly restricted to training fold R_k (80 cases).
+   - Zero test case or connected twin leakage into retrieval or calibrator fitting.
+   - Fold-level Platt and Isotonic calibrators fit on out-of-group training predictions.
+4. Metric computation: ROC-AUC, Brier score, Log loss, ECE, MCE, False Pass Rate, False Escalation Rate.
+5. Disaggregated cohort evaluation across the 5 case types.
+6. Machine-readable JSON export to research/results/confidence_calibration_results.json.
+7. Publication-quality figure generation to research/results/reliability_diagram.png.
 """
 
 from __future__ import annotations
@@ -71,46 +75,74 @@ def run_confidence_calibration_experiments() -> None:
     print(f"       -> Query embeddings shape:   {query_embs.shape}")
     print(f"       -> Passage embeddings shape: {passage_embs.shape}")
 
-    # 3. Execute Group-Exclusion LOO retrieval and scoring
-    print("\n[3/6] Executing Group-Exclusion LOO retrieval and reliability scoring...")
-    predictions = pipeline.run_evaluation(
+    # 3. Execute Strict 5-Fold Partitioned Cross-Validation
+    print(
+        "\n[3/6] Executing Strict 5-Fold Partitioned Cross-Validation (Connected Groups)..."
+    )
+    oof_predictions = pipeline.run_partitioned_cross_validation(
+        raw_examples=raw_examples,
+        query_embs=query_embs,
+        passage_embs=passage_embs,
+        n_splits=5,
+    )
+    print(
+        f"       -> Generated out-of-fold predictions for all {len(oof_predictions)} queries."
+    )
+
+    # Fit reference production-ready calibrators on complete dataset
+    ref_platt, ref_iso = pipeline.fit_reference_calibrators(
+        raw_examples=raw_examples,
+        query_embs=query_embs,
+        passage_embs=passage_embs,
+    )
+
+    # 4. Evaluate Partitioned Cross-Validation
+    print(
+        "\n[4/6] Computing evaluation metrics across partitioned cross-validation folds..."
+    )
+    evaluator = CalibrationEvaluator(n_splits=5, random_state=42)
+    benchmark_results = evaluator.evaluate_partitioned_cv(
+        predictions=oof_predictions,
+        fitted_calibrators={
+            "platt": ref_platt.to_dict(),
+            "isotonic": ref_iso.to_dict(),
+        },
+    )
+
+    # Also compute Leave-One-Out comparisons for documentation
+    print("       -> Running secondary full LOO group-exclusion evaluation...")
+    loo_ge_predictions = pipeline.run_evaluation(
         raw_examples=raw_examples,
         instances=instances,
         query_embs=query_embs,
         passage_embs=passage_embs,
         protocol="group_exclusion",
     )
-    print(f"       -> Generated predictions for all {len(predictions)} queries.")
+    loo_ge_benchmark = evaluator.evaluate_all(loo_ge_predictions)
+    benchmark_results["group_exclusion_loo_comparison"] = {
+        "raw_score_metrics": loo_ge_benchmark["raw_score_metrics"],
+        "cohort_metrics": loo_ge_benchmark["cohort_metrics"],
+    }
 
-    # Also run Standard LOO for comparative contamination analysis
     print(
-        "       -> Running secondary Standard LOO (with contrastive pair presence)..."
+        "       -> Running secondary full LOO standard (unfiltered contrastive) evaluation..."
     )
-    std_predictions = pipeline.run_evaluation(
+    loo_std_predictions = pipeline.run_evaluation(
         raw_examples=raw_examples,
         instances=instances,
         query_embs=query_embs,
         passage_embs=passage_embs,
         protocol="standard_loo",
     )
-
-    # 4. Evaluate Calibration Models
-    print(
-        "\n[4/6] Fitting and evaluating calibration models via 5-Fold Stratified Group CV..."
-    )
-    evaluator = CalibrationEvaluator(n_splits=5, random_state=42)
-    benchmark_results = evaluator.evaluate_all(predictions)
-
-    # Secondary standard LOO evaluation
-    std_benchmark = evaluator.evaluate_all(std_predictions)
+    loo_std_benchmark = evaluator.evaluate_all(loo_std_predictions)
     benchmark_results["standard_loo_comparison"] = {
-        "raw_score_metrics": std_benchmark["raw_score_metrics"],
-        "cohort_metrics": std_benchmark["cohort_metrics"],
+        "raw_score_metrics": loo_std_benchmark["raw_score_metrics"],
+        "cohort_metrics": loo_std_benchmark["cohort_metrics"],
     }
 
     # 5. Display Summary Tables
     print("\n" + "=" * 75)
-    print("CALIBRATION BENCHMARK RESULTS (OVERALL N=200 QUERIES)")
+    print("PARTITIONED 5-FOLD CROSS-VALIDATION RESULTS (OVERALL N=200 QUERIES)")
     print("=" * 75)
     print(
         f"{'Model / Approach':<25} | {'ROC-AUC':<8} | {'Brier':<8} | {'LogLoss':<8} | {'ECE':<8} | {'Precision':<9} | {'F1':<6}"

@@ -211,14 +211,8 @@ class ReliabilityGateHandler(reliability_pb2_grpc.ReliabilityServiceServicer):
                 for n in result.retrieved_evidence
             ]
 
-            effective_confidence = (
-                result.calibrated_confidence
-                if result.is_calibrated and result.calibrated_confidence is not None
-                else result.raw_score
-            )
-
             return reliability_pb2.GateResponse(
-                confidence=effective_confidence,
+                confidence=result.raw_score,
                 outcome=proto_outcome,
                 reason_code=result.reason_code,
                 neighbors=proto_neighbors,
