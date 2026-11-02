@@ -8,6 +8,7 @@ from typing import Any
 from arda_reliability_service.application.use_cases.retrieve_reference_examples import (
     RetrieveReferenceExamplesUseCase,
 )
+from arda_reliability_service.domain.calibration import CalibratorPort
 from arda_reliability_service.domain.exceptions import ReliabilityEvaluationError
 from arda_reliability_service.domain.scoring_engine import (
     ReliabilityDecisionEngine,
@@ -41,11 +42,13 @@ class EvaluateReliabilityUseCase:
         scoring_engine: ReliabilityScoringEngine | None = None,
         decision_engine: ReliabilityDecisionEngine | None = None,
         config: ScoringConfig | None = None,
+        calibrator: CalibratorPort | None = None,
     ) -> None:
         self.retrieval_use_case = retrieval_use_case
         self.scoring_engine = scoring_engine or ReliabilityScoringEngine()
         self.decision_engine = decision_engine or ReliabilityDecisionEngine()
         self.config = config or ScoringConfig()
+        self.calibrator = calibrator
 
     async def execute(
         self,
@@ -105,6 +108,25 @@ class EvaluateReliabilityUseCase:
             )
             conflicting_count = len(neighbors) - matching_count
 
+            # Optional confidence calibration
+            calibrated_conf: float | None = None
+            is_calibrated = False
+            calib_version: str | None = None
+
+            if self.calibrator is not None and self.calibrator.is_fitted:
+                try:
+                    calibrated_conf = self.calibrator.calibrate(score.raw_score)
+                    is_calibrated = True
+                    calib_version = self.calibrator.version
+                except Exception as cal_err:  # noqa: BLE001
+                    logger.warning(
+                        "Confidence calibration failed for raw score %.4f: %s",
+                        score.raw_score,
+                        cal_err,
+                    )
+                    calibrated_conf = None
+                    is_calibrated = False
+
             metadata: dict[str, Any] = {
                 "retrieval_mode": result_set.retrieval_mode,
                 "retrieval_latency_ms": result_set.execution_latency_ms,
@@ -115,6 +137,8 @@ class EvaluateReliabilityUseCase:
                 "min_density_threshold": cfg.min_density_threshold,
                 "min_agreement_threshold": cfg.min_agreement_threshold,
                 "min_reliability_threshold": cfg.min_reliability_threshold,
+                "is_calibrated": is_calibrated,
+                "calibration_version": calib_version,
             }
 
             return ReliabilityEvaluationResult(
@@ -132,6 +156,9 @@ class EvaluateReliabilityUseCase:
                 threshold_used=cfg.min_reliability_threshold,
                 retrieved_evidence=neighbors,
                 metadata=metadata,
+                calibrated_confidence=calibrated_conf,
+                is_calibrated=is_calibrated,
+                calibration_version=calib_version,
             )
 
         except Exception as exc:

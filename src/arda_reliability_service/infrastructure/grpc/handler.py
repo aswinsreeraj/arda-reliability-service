@@ -14,6 +14,7 @@ from arda_reliability_service.application.use_cases.evaluate_reliability import 
 from arda_reliability_service.application.use_cases.retrieve_reference_examples import (
     RetrieveReferenceExamplesUseCase,
 )
+from arda_reliability_service.domain.calibration import CalibratorPort
 from arda_reliability_service.domain.exceptions import DomainValidationError
 from arda_reliability_service.domain.scoring_engine import (
     ReliabilityDecisionEngine,
@@ -53,11 +54,13 @@ class ReliabilityGateHandler(reliability_pb2_grpc.ReliabilityServiceServicer):
         db_manager: DatabaseManager | None = None,
         embedding_adapter: SentenceTransformerEmbeddingAdapter | None = None,
         config: ScoringConfig | None = None,
+        calibrator: CalibratorPort | None = None,
     ) -> None:
         self.evaluate_use_case = evaluate_use_case
         self.db_manager = db_manager
         self.embedding_adapter = embedding_adapter
         self.config = config or ScoringConfig()
+        self.calibrator = calibrator
         self.scoring_engine = ReliabilityScoringEngine()
         self.decision_engine = ReliabilityDecisionEngine()
 
@@ -163,6 +166,7 @@ class ReliabilityGateHandler(reliability_pb2_grpc.ReliabilityServiceServicer):
                         scoring_engine=self.scoring_engine,
                         decision_engine=self.decision_engine,
                         config=self.config,
+                        calibrator=self.calibrator,
                     )
                     result = await use_case.execute(
                         request=eval_req,
@@ -207,8 +211,14 @@ class ReliabilityGateHandler(reliability_pb2_grpc.ReliabilityServiceServicer):
                 for n in result.retrieved_evidence
             ]
 
+            effective_confidence = (
+                result.calibrated_confidence
+                if result.is_calibrated and result.calibrated_confidence is not None
+                else result.raw_score
+            )
+
             return reliability_pb2.GateResponse(
-                confidence=result.raw_score,
+                confidence=effective_confidence,
                 outcome=proto_outcome,
                 reason_code=result.reason_code,
                 neighbors=proto_neighbors,

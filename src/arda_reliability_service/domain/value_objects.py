@@ -187,6 +187,9 @@ class ReliabilityEvaluationResult:
     threshold_used: float
     retrieved_evidence: list[ReferenceNeighbor] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    calibrated_confidence: float | None = None
+    is_calibrated: bool = False
+    calibration_version: str | None = None
 
 
 @dataclass(frozen=True)

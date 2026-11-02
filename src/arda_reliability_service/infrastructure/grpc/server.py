@@ -7,6 +7,7 @@ from concurrent import futures
 
 import grpc
 from arda_reliability_service.config import Settings, get_settings
+from arda_reliability_service.domain.calibration import CalibratorPort
 from arda_reliability_service.infrastructure.database.connection import DatabaseManager
 from arda_reliability_service.infrastructure.embedding.sentence_transformer_adapter import (
     SentenceTransformerEmbeddingAdapter,
@@ -101,6 +102,7 @@ def create_grpc_server(
     db_manager: DatabaseManager | None = None,
     embedding_adapter: SentenceTransformerEmbeddingAdapter | None = None,
     port_override: int | None = None,
+    calibrator: CalibratorPort | None = None,
 ) -> tuple[ReliabilityGrpcServer, DatabaseManager]:
     """Factory creating fully wired production gRPC server and database manager."""
     cfg = settings or get_settings()
@@ -119,6 +121,7 @@ def create_grpc_server(
         db_manager=dm,
         embedding_adapter=adapter,
         config=scoring_config,
+        calibrator=calibrator,
     )
 
     server = ReliabilityGrpcServer(
