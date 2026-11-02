@@ -29,7 +29,11 @@ from research.experiments.metrics import (
     LOOResult,
     PerformanceMetrics,
     RetrievedNeighbor,
+    calculate_category_relevance,
     calculate_classification_metrics,
+    calculate_cohort_metrics,
+    calculate_global_similarity_metrics,
+    calculate_retrieval_baselines,
     calculate_similarity_metrics,
     evaluate_contrastive_pairs,
 )
@@ -255,8 +259,20 @@ class EmbeddingEvaluator:
             y_pred = [res.predicted_labels[k] for res in loo_results]
             k_metrics[k] = calculate_classification_metrics(y_true, y_pred)
 
-        # Calculate Similarity Separation
+        # Calculate Similarity Separation across top retrieved neighbors
         sim_metrics = calculate_similarity_metrics(loo_results)
+
+        # Calculate Global Similarity Metrics across all candidate pairs
+        global_sim_metrics = calculate_global_similarity_metrics(sim_matrix, y_true)
+
+        # Break down metrics by cohort: contrastive (N=20) vs non-contrastive (N=80)
+        cohort_metrics = calculate_cohort_metrics(loo_results, examples)
+
+        # Calculate semantic topical relevance (Dispute category Precision@K)
+        category_relevance = calculate_category_relevance(loo_results, examples)
+
+        # Finite-sample retrieval baselines
+        baselines = calculate_retrieval_baselines()
 
         # Contrastive Pairs Analysis
         # Note: Symmetric passage-to-passage similarity matrix for intrinsic pair similarity
@@ -308,4 +324,8 @@ class EmbeddingEvaluator:
             contrastive_pairs=contrastive_metrics,
             performance=perf,
             detailed_loo_results=detailed_records,
+            global_similarity_metrics=global_sim_metrics,
+            cohort_metrics=cohort_metrics,
+            category_relevance=category_relevance,
+            baselines=baselines,
         )

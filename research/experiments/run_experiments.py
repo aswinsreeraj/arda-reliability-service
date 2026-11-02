@@ -42,6 +42,7 @@ from research.experiments.visualization import (
     plot_confusion_matrices,
     plot_contrastive_pairs_comparison,
     plot_latency_and_memory,
+    plot_similarity_distribution_density,
     plot_similarity_separation,
 )
 
@@ -96,6 +97,10 @@ def export_csv_summary(results: dict[str, ExperimentResult], output_path: Path) 
         sim = res.similarity_metrics
         perf = res.performance
 
+        cohort = res.cohort_metrics or {}
+        g_sim = res.global_similarity_metrics
+        cat_rel = res.category_relevance or {}
+
         rows.append(
             {
                 "experiment_id": eid,
@@ -109,9 +114,21 @@ def export_csv_summary(results: dict[str, ExperimentResult], output_path: Path) 
                 "top3_f1_macro": k3.f1_macro,
                 "top5_accuracy": k5.accuracy,
                 "top5_f1_macro": k5.f1_macro,
-                "mean_same_label_similarity": sim.mean_same_label_similarity,
-                "mean_diff_label_similarity": sim.mean_diff_label_similarity,
-                "similarity_separation": sim.similarity_separation,
+                "non_contrastive_top1_acc": cohort.get("non_contrastive_top1_acc", 0.0),
+                "non_contrastive_top3_acc": cohort.get("non_contrastive_top3_acc", 0.0),
+                "non_contrastive_top5_acc": cohort.get("non_contrastive_top5_acc", 0.0),
+                "contrastive_top1_acc": cohort.get("contrastive_top1_acc", 0.0),
+                "contrastive_top3_acc": cohort.get("contrastive_top3_acc", 0.0),
+                "contrastive_top5_acc": cohort.get("contrastive_top5_acc", 0.0),
+                "top5_same_label_similarity": sim.mean_same_label_similarity,
+                "top5_diff_label_similarity": sim.mean_diff_label_similarity,
+                "top5_similarity_separation": sim.similarity_separation,
+                "global_similarity_separation": g_sim.similarity_separation
+                if g_sim
+                else 0.0,
+                "category_precision_at_1": cat_rel.get("category_precision_at_1", 0.0),
+                "category_precision_at_3": cat_rel.get("category_precision_at_3", 0.0),
+                "category_precision_at_5": cat_rel.get("category_precision_at_5", 0.0),
                 "per_example_embedding_ms": perf.per_example_embedding_ms,
                 "per_query_retrieval_ms": perf.per_query_retrieval_ms,
                 "peak_memory_mb": perf.peak_memory_mb,
@@ -430,6 +447,12 @@ def main() -> None:
             results, RESULTS_DIR / "confusion_matrices_top3.png", k=3
         )
         plot_similarity_separation(results, RESULTS_DIR / "similarity_separation.png")
+        plot_similarity_distribution_density(
+            results,
+            RESULTS_DIR.parent / "experiments" / ".cache",
+            DATASET_PATH,
+            RESULTS_DIR / "similarity_distribution_density.png",
+        )
         plot_contrastive_pairs_comparison(
             results, RESULTS_DIR / "contrastive_pairs_comparison.png"
         )

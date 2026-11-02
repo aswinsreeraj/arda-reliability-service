@@ -31,7 +31,11 @@ from research.experiments.config import (
 from research.experiments.metrics import (
     LOOResult,
     RetrievedNeighbor,
+    calculate_category_relevance,
     calculate_classification_metrics,
+    calculate_cohort_metrics,
+    calculate_global_similarity_metrics,
+    calculate_retrieval_baselines,
     calculate_similarity_metrics,
     evaluate_contrastive_pairs,
 )
@@ -248,6 +252,90 @@ class TestMetricsCalculation:
         assert np.isclose(sim_metrics.mean_diff_label_similarity, 0.60)
         assert np.isclose(sim_metrics.similarity_separation, 0.20)
 
+    def test_global_similarity_separation_calculation(self) -> None:
+        # Synthetic 3x3 matrix: 2 APPROVE, 1 REJECT
+        # sim[0, 1] = 0.8 (same), sim[0, 2] = 0.3 (diff), sim[1, 2] = 0.4 (diff)
+        sim_matrix = np.array(
+            [
+                [1.0, 0.8, 0.3],
+                [0.8, 1.0, 0.4],
+                [0.3, 0.4, 1.0],
+            ]
+        )
+        labels = ["APPROVE", "APPROVE", "REJECT"]
+        g_metrics = calculate_global_similarity_metrics(sim_matrix, labels)
+
+        # Same pairs: (0, 1) and (1, 0) -> mean = 0.80
+        # Diff pairs: (0, 2), (2, 0), (1, 2), (2, 1) -> (0.3+0.3+0.4+0.4)/4 = 0.35
+        # Separation: 0.80 - 0.35 = 0.45
+        assert np.isclose(g_metrics.mean_same_label_similarity, 0.80)
+        assert np.isclose(g_metrics.mean_diff_label_similarity, 0.35)
+        assert np.isclose(g_metrics.similarity_separation, 0.45)
+
+    def test_cohort_metrics_calculation(self, seed_dataset: dict) -> None:
+        examples = seed_dataset["examples"]
+        # Create mock LOOResult for all 100 items
+        mock_loo = []
+        for ex in examples:
+            mock_loo.append(
+                LOOResult(
+                    example_id=ex["example_id"],
+                    true_label=ex["label"],
+                    retrieved_neighbors=[],
+                    predicted_labels={1: ex["label"], 3: ex["label"], 5: ex["label"]},
+                    is_correct={1: True, 3: True, 5: True},
+                )
+            )
+
+        cohort = calculate_cohort_metrics(mock_loo, examples)
+        assert cohort["contrastive_count"] == 20
+        assert cohort["non_contrastive_count"] == 80
+        assert cohort["contrastive_top1_acc"] == 1.0
+        assert cohort["non_contrastive_top1_acc"] == 1.0
+
+    def test_category_relevance_calculation(self, seed_dataset: dict) -> None:
+        examples = seed_dataset["examples"]
+        # Mock LOOResult where retrieved neighbor matches query's category
+        mock_loo = [
+            LOOResult(
+                example_id=examples[0]["example_id"],
+                true_label="APPROVE",
+                retrieved_neighbors=[
+                    RetrievedNeighbor(
+                        example_id=examples[0]["example_id"],
+                        label="APPROVE",
+                        similarity=0.9,
+                        rank=1,
+                    ),
+                    RetrievedNeighbor(
+                        example_id=examples[0]["example_id"],
+                        label="APPROVE",
+                        similarity=0.8,
+                        rank=2,
+                    ),
+                    RetrievedNeighbor(
+                        example_id=examples[0]["example_id"],
+                        label="APPROVE",
+                        similarity=0.7,
+                        rank=3,
+                    ),
+                ],
+            )
+        ]
+        relevance = calculate_category_relevance(mock_loo, examples)
+        assert relevance["category_precision_at_1"] == 1.0
+        assert relevance["category_precision_at_3"] == 1.0
+
+    def test_retrieval_baselines_calculation(self) -> None:
+        baselines = calculate_retrieval_baselines()
+        assert baselines["majority_class_global"] == 0.5000
+        assert baselines["majority_class_loo"] == 0.0000
+        assert baselines["random_balanced_chance"] == 0.5000
+        assert baselines["random_retrieval_top1"] == 0.4949
+        assert baselines["random_retrieval_top3"] == 0.4923
+        assert baselines["random_retrieval_top5"] == 0.4903
+        assert baselines["random_category_precision_top1"] == 0.1810
+
 
 class TestContrastivePairsEvaluation:
     """Tests contrastive pair counterfactual twin evaluation."""
@@ -306,6 +394,7 @@ class TestGeneratedArtifacts:
             "confusion_matrices_top1.png",
             "confusion_matrices_top3.png",
             "similarity_separation.png",
+            "similarity_distribution_density.png",
             "contrastive_pairs_comparison.png",
             "latency_memory_comparison.png",
         ],

@@ -115,6 +115,10 @@ class ExperimentResult:
     contrastive_pairs: list[ContrastivePairMetric]
     performance: PerformanceMetrics
     detailed_loo_results: list[dict[str, Any]] = field(default_factory=list)
+    global_similarity_metrics: SimilarityMetrics | None = None
+    cohort_metrics: dict[str, Any] | None = None
+    category_relevance: dict[str, float] | None = None
+    baselines: dict[str, float] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert result object into a serializable dictionary."""
@@ -265,3 +269,131 @@ def evaluate_contrastive_pairs(
         results.append(metric)
 
     return results
+
+
+def calculate_global_similarity_metrics(
+    similarity_matrix: np.ndarray, labels: list[str]
+) -> SimilarityMetrics:
+    """Compute global pairwise similarity separation across all candidate pairs (i != j)."""
+    n = len(labels)
+    same_sims: list[float] = []
+    diff_sims: list[float] = []
+
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            sim = float(similarity_matrix[i, j])
+            if labels[i] == labels[j]:
+                same_sims.append(sim)
+            else:
+                diff_sims.append(sim)
+
+    same_mean = float(np.mean(same_sims)) if same_sims else 0.0
+    same_std = float(np.std(same_sims)) if same_sims else 0.0
+    diff_mean = float(np.mean(diff_sims)) if diff_sims else 0.0
+    diff_std = float(np.std(diff_sims)) if diff_sims else 0.0
+    separation = same_mean - diff_mean
+
+    return SimilarityMetrics(
+        mean_same_label_similarity=round(same_mean, 4),
+        std_same_label_similarity=round(same_std, 4),
+        mean_diff_label_similarity=round(diff_mean, 4),
+        std_diff_label_similarity=round(diff_std, 4),
+        similarity_separation=round(separation, 4),
+    )
+
+
+def calculate_cohort_metrics(
+    loo_results: list[LOOResult], dataset_examples: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Break down LOO accuracy across contrastive (N=20) vs non-contrastive (N=80) cohorts."""
+    contrastive_ids = {
+        ex["example_id"]
+        for ex in dataset_examples
+        if ex["metadata"].get("case_type") == "contrastive_pair"
+    }
+
+    c_loo = [res for res in loo_results if res.example_id in contrastive_ids]
+    nc_loo = [res for res in loo_results if res.example_id not in contrastive_ids]
+
+    c_top1 = sum(res.is_correct[1] for res in c_loo) / len(c_loo) if c_loo else 0.0
+    c_top3 = sum(res.is_correct[3] for res in c_loo) / len(c_loo) if c_loo else 0.0
+    c_top5 = sum(res.is_correct[5] for res in c_loo) / len(c_loo) if c_loo else 0.0
+
+    nc_top1 = sum(res.is_correct[1] for res in nc_loo) / len(nc_loo) if nc_loo else 0.0
+    nc_top3 = sum(res.is_correct[3] for res in nc_loo) / len(nc_loo) if nc_loo else 0.0
+    nc_top5 = sum(res.is_correct[5] for res in nc_loo) / len(nc_loo) if nc_loo else 0.0
+
+    return {
+        "contrastive_count": len(c_loo),
+        "contrastive_top1_acc": round(c_top1, 4),
+        "contrastive_top3_acc": round(c_top3, 4),
+        "contrastive_top5_acc": round(c_top5, 4),
+        "non_contrastive_count": len(nc_loo),
+        "non_contrastive_top1_acc": round(nc_top1, 4),
+        "non_contrastive_top3_acc": round(nc_top3, 4),
+        "non_contrastive_top5_acc": round(nc_top5, 4),
+    }
+
+
+def calculate_category_relevance(
+    loo_results: list[LOOResult], dataset_examples: list[dict[str, Any]]
+) -> dict[str, float]:
+    """Calculate dispute category Precision@K to evaluate semantic retrieval relevance."""
+    id_to_cat = {
+        ex["example_id"]: ex["metadata"]["category"] for ex in dataset_examples
+    }
+    n = len(loo_results)
+    if n == 0:
+        return {
+            "category_precision_at_1": 0.0,
+            "category_precision_at_3": 0.0,
+            "category_precision_at_5": 0.0,
+        }
+
+    p1, p3, p5 = [], [], []
+    for res in loo_results:
+        q_cat = id_to_cat[res.example_id]
+        top1 = res.retrieved_neighbors[0]
+        top3 = res.retrieved_neighbors[:3]
+        top5 = res.retrieved_neighbors[:5]
+
+        p1.append(1.0 if id_to_cat[top1.example_id] == q_cat else 0.0)
+        p3.append(
+            sum(1.0 for neighbor in top3 if id_to_cat[neighbor.example_id] == q_cat)
+            / len(top3)
+        )
+        p5.append(
+            sum(1.0 for neighbor in top5 if id_to_cat[neighbor.example_id] == q_cat)
+            / len(top5)
+        )
+
+    return {
+        "category_precision_at_1": round(float(np.mean(p1)), 4),
+        "category_precision_at_3": round(float(np.mean(p3)), 4),
+        "category_precision_at_5": round(float(np.mean(p5)), 4),
+    }
+
+
+def calculate_retrieval_baselines() -> dict[str, float]:
+    """Calculate finite-sample baseline expectations for N=100 balanced Leave-One-Out cross-validation."""
+    # N=100 (50 APPROVE, 50 REJECT)
+    # Global majority class: 50 / 100 = 0.5000
+    # Strict LOO pool: remaining 99 examples contain 49 same-label and 50 diff-label.
+    # Majority-of-pool classifier in strict LOO always predicts the wrong label: 0.0000.
+    # Uniform random prediction: 0.5000 (95% CI: 40.2% - 59.8%).
+    # Random retrieval from 99 LOO candidates without replacement:
+    # k=1: 49/99 = 0.4949
+    # k=3: Hypergeometric majority (>=2 of 3) = 0.4923
+    # k=5: Hypergeometric majority (>=3 of 5) = 0.4903
+    # Random dispute category Precision@1: sum(N_c * (N_c - 1)) / (100 * 99) = 1792 / 9900 = 0.1810
+    return {
+        "majority_class_global": 0.5000,
+        "majority_class_loo": 0.0000,
+        "random_balanced_chance": 0.5000,
+        "random_retrieval_top1": round(49.0 / 99.0, 4),
+        "random_retrieval_top3": 0.4923,
+        "random_retrieval_top5": 0.4903,
+        "random_category_precision_top1": 0.1810,
+    }

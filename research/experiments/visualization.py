@@ -319,3 +319,142 @@ def plot_latency_and_memory(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
+
+
+def plot_similarity_distribution_density(
+    results: dict[str, ExperimentResult],
+    caches_dir: Path,
+    dataset_path: Path,
+    output_path: Path,
+) -> None:
+    """Generate multi-panel comparison of same-label vs different-label similarity distributions.
+
+    Produces a 2-row x 4-column figure:
+    - Row 1: Global candidate space (all 9,900 pairwise comparisons across 100 examples)
+    - Row 2: Top-5 LOO retrieved nearest neighbors (500 local candidate decisions)
+    """
+    import json
+
+    with open(dataset_path, encoding="utf-8") as f:
+        dataset = json.load(f)["examples"]
+
+    labels = [ex["label"] for ex in dataset]
+    n = len(labels)
+
+    fig, axes = plt.subplots(2, 4, figsize=(20, 9))
+
+    exp_configs = [
+        ("E1", "bge-small_raw_value", "BGE-small / Raw-Value"),
+        ("E2", "bge-small_ratio_verbalized", "BGE-small / Ratio-Verbalized"),
+        ("E3", "e5-base_raw_value", "E5-base / Raw-Value"),
+        ("E4", "e5-base_ratio_verbalized", "E5-base / Ratio-Verbalized"),
+    ]
+
+    for col, (eid, cache_name, title) in enumerate(exp_configs):
+        if eid not in results:
+            continue
+
+        # Row 1: Global pairwise comparisons
+        ax_top = axes[0, col]
+        cache_path = caches_dir / f"{cache_name}_embeddings.npz"
+        if cache_path.exists():
+            cache = np.load(cache_path)
+            queries = cache["queries"]
+            passages = cache["passages"]
+            sim_matrix = np.matmul(queries, passages.T)
+
+            same_sims, diff_sims = [], []
+            for i in range(n):
+                for j in range(n):
+                    if i == j:
+                        continue
+                    sim = float(sim_matrix[i, j])
+                    if labels[i] == labels[j]:
+                        same_sims.append(sim)
+                    else:
+                        diff_sims.append(sim)
+
+            same_m, diff_m = float(np.mean(same_sims)), float(np.mean(diff_sims))
+            delta_g = same_m - diff_m
+
+            ax_top.hist(
+                same_sims,
+                bins=35,
+                density=True,
+                alpha=0.45,
+                color="forestgreen",
+                label=f"Same (μ={same_m:.3f})",
+            )
+            ax_top.hist(
+                diff_sims,
+                bins=35,
+                density=True,
+                alpha=0.45,
+                color="crimson",
+                label=f"Diff (μ={diff_m:.3f})",
+            )
+            ax_top.axvline(same_m, color="green", linestyle="--", linewidth=1.5)
+            ax_top.axvline(diff_m, color="darkred", linestyle="--", linewidth=1.5)
+            ax_top.set_title(
+                f"{eid}: {title}\nGlobal Space (N=9,900, Δ={delta_g:+.4f})",
+                fontsize=10,
+                fontweight="bold",
+            )
+            ax_top.set_xlabel("Cosine Similarity", fontsize=9)
+            ax_top.legend(loc="upper left", fontsize=8)
+            ax_top.grid(axis="y", linestyle=":", alpha=0.6)
+
+        # Row 2: Top-5 retrieved neighbors
+        ax_bot = axes[1, col]
+        top5_same, top5_diff = [], []
+        for res in results[eid].detailed_loo_results:
+            neighbors = res.get("top_neighbors", [])
+            for n_item in neighbors:
+                if n_item["label"] == res["true_label"]:
+                    top5_same.append(n_item["similarity"])
+                else:
+                    top5_diff.append(n_item["similarity"])
+
+        top5_sm = float(np.mean(top5_same)) if top5_same else 0.0
+        top5_dm = float(np.mean(top5_diff)) if top5_diff else 0.0
+        delta_t5 = top5_sm - top5_dm
+
+        ax_bot.hist(
+            top5_same,
+            bins=25,
+            density=True,
+            alpha=0.45,
+            color="forestgreen",
+            label=f"Same (μ={top5_sm:.3f})",
+        )
+        ax_bot.hist(
+            top5_diff,
+            bins=25,
+            density=True,
+            alpha=0.45,
+            color="crimson",
+            label=f"Diff (μ={top5_dm:.3f})",
+        )
+        ax_bot.axvline(top5_sm, color="green", linestyle="--", linewidth=1.5)
+        ax_bot.axvline(top5_dm, color="darkred", linestyle="--", linewidth=1.5)
+        ax_bot.set_title(
+            f"{eid}: Top-5 Retrieved (N=500, Δ={delta_t5:+.4f})",
+            fontsize=10,
+            fontweight="bold",
+        )
+        ax_bot.set_xlabel("Cosine Similarity", fontsize=9)
+        ax_bot.legend(loc="upper left", fontsize=8)
+        ax_bot.grid(axis="y", linestyle=":", alpha=0.6)
+
+    axes[0, 0].set_ylabel("Global Density", fontsize=11, fontweight="bold")
+    axes[1, 0].set_ylabel("Top-5 Density", fontsize=11, fontweight="bold")
+
+    fig.suptitle(
+        "ARDA Research Spike Audit: Pairwise Cosine Similarity Distributions\n(Row 1: Full Global Candidate Space | Row 2: Top-5 LOO Retrieved Neighbors)",
+        fontsize=13,
+        fontweight="bold",
+    )
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)

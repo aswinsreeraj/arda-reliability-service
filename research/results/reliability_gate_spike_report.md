@@ -46,10 +46,10 @@ Based on measured retrieval agreement, similarity separation, and latency effici
 
 | Experiment | Model | Dimension | Template | Top-1 Acc | Top-3 Acc | Top-5 Acc | F1 Macro (Top-1) | Sim Separation (Δ) | Per-Ex Latency | Peak RAM/VRAM |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **E1** | `bge-small-en-v1.5` | 384 | `raw_value` | **41.0%** | 47.0% | 46.0% | 0.4099 | **-0.0145** | 9.5 ms | 127.3 MB |
-| **E2** | `bge-small-en-v1.5` | 384 | `ratio_verbalized` | **46.0%** | 48.0% | 48.0% | 0.4600 | **-0.0091** | 2.7 ms | 128.8 MB |
-| **E3** | `e5-base-v2` | 768 | `raw_value` | **45.0%** | 39.0% | 53.0% | 0.4499 | **-0.0066** | 5.7 ms | 418.7 MB |
-| **E4** | `e5-base-v2` | 768 | `ratio_verbalized` | **45.0%** | 45.0% | 44.0% | 0.4499 | **-0.0036** | 7.0 ms | 0.0 MB |
+| **E1** | `bge-small-en-v1.5` | 384 | `raw_value` | **41.0%** | 47.0% | 46.0% | 0.4099 | **-0.0145** | 0.0 ms | 0.0 MB |
+| **E2** | `bge-small-en-v1.5` | 384 | `ratio_verbalized` | **46.0%** | 48.0% | 48.0% | 0.4600 | **-0.0091** | 0.0 ms | 0.0 MB |
+| **E3** | `e5-base-v2` | 768 | `raw_value` | **45.0%** | 39.0% | 53.0% | 0.4499 | **-0.0066** | 0.0 ms | 0.0 MB |
+| **E4** | `e5-base-v2` | 768 | `ratio_verbalized` | **45.0%** | 45.0% | 44.0% | 0.4499 | **-0.0036** | 0.0 ms | 0.0 MB |
 
 ---
 
@@ -73,8 +73,8 @@ Based on measured retrieval agreement, similarity separation, and latency effici
   - BGE-small separation (Δ): E1 = -0.0145, E2 = -0.0091
   - E5-base separation (Δ): E3 = -0.0066, E4 = -0.0036
 - **Inference Efficiency**:
-  - BGE-small embeds at ~9.5 ms/ex with a peak footprint of ~127.3 MB.
-  - E5-base requires ~5.7 ms/ex with a peak footprint of ~418.7 MB.
+  - BGE-small embeds at ~0.0 ms/ex with a peak footprint of ~0.0 MB.
+  - E5-base requires ~0.0 ms/ex with a peak footprint of ~0.0 MB.
   - BGE-small is substantially faster with half the vector storage requirements (384 vs 768 float32 dimensions).
 
 ---
@@ -124,8 +124,8 @@ In contrastive pairs, high semantic similarity is **expected and desirable**:
 |---|---|---|---|
 | Embedding Dimensions | 384 | 768 | 0.50x |
 | Vector Index Size (100k items) | ~153.6 MB | ~307.2 MB | 0.50x |
-| Per-Example Encoding Latency | ~9.5 ms | ~5.7 ms | 1.67x |
-| Peak Memory Usage | ~127.3 MB | ~418.7 MB | 0.30x |
+| Per-Example Encoding Latency | ~0.0 ms | ~0.0 ms | 0.00x |
+| Peak Memory Usage | ~0.0 MB | ~0.0 MB | 0.00x |
 
 ---
 

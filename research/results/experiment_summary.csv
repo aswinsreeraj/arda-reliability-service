@@ -1,5 +1,5 @@
-experiment_id,model_name,template_name,top1_accuracy,top1_f1_macro,top1_approve_f1,top1_reject_f1,top3_accuracy,top3_f1_macro,top5_accuracy,top5_f1_macro,mean_same_label_similarity,mean_diff_label_similarity,similarity_separation,per_example_embedding_ms,per_query_retrieval_ms,peak_memory_mb,device
-E1,BAAI/bge-small-en-v1.5,raw_value,0.41,0.4099,0.4158,0.404,0.47,0.4695,0.46,0.4598,0.7926,0.8071,-0.0145,9.54,0.021,127.27,cuda
-E2,BAAI/bge-small-en-v1.5,ratio_verbalized,0.46,0.46,0.46,0.46,0.48,0.4798,0.48,0.4798,0.8133,0.8224,-0.0091,2.73,0.015,128.77,cuda
-E3,intfloat/e5-base-v2,raw_value,0.45,0.4499,0.4554,0.4444,0.39,0.3885,0.53,0.5296,0.8646,0.8713,-0.0066,5.72,0.012,418.73,cuda
-E4,intfloat/e5-base-v2,ratio_verbalized,0.45,0.4499,0.4554,0.4444,0.45,0.4473,0.44,0.438,0.8678,0.8714,-0.0036,7.05,0.019,0.0,cuda
+experiment_id,model_name,template_name,top1_accuracy,top1_f1_macro,top1_approve_f1,top1_reject_f1,top3_accuracy,top3_f1_macro,top5_accuracy,top5_f1_macro,non_contrastive_top1_acc,non_contrastive_top3_acc,non_contrastive_top5_acc,contrastive_top1_acc,contrastive_top3_acc,contrastive_top5_acc,top5_same_label_similarity,top5_diff_label_similarity,top5_similarity_separation,global_similarity_separation,category_precision_at_1,category_precision_at_3,category_precision_at_5,per_example_embedding_ms,per_query_retrieval_ms,peak_memory_mb,device
+E1,BAAI/bge-small-en-v1.5,raw_value,0.41,0.4099,0.4158,0.404,0.47,0.4695,0.46,0.4598,0.5125,0.5375,0.5,0.0,0.2,0.3,0.7926,0.8071,-0.0145,-0.0002,0.52,0.4267,0.376,0.0,0.026,0.0,cuda
+E2,BAAI/bge-small-en-v1.5,ratio_verbalized,0.46,0.46,0.46,0.46,0.48,0.4798,0.48,0.4798,0.575,0.55,0.525,0.0,0.2,0.3,0.8133,0.8224,-0.0091,-0.0004,0.55,0.4267,0.372,0.0,0.021,0.0,cuda
+E3,intfloat/e5-base-v2,raw_value,0.45,0.4499,0.4554,0.4444,0.39,0.3885,0.53,0.5296,0.5625,0.45,0.6,0.0,0.15,0.25,0.8646,0.8713,-0.0066,-0.0002,0.53,0.4567,0.392,0.0,0.012,0.0,cuda
+E4,intfloat/e5-base-v2,ratio_verbalized,0.45,0.4499,0.4554,0.4444,0.45,0.4473,0.44,0.438,0.5625,0.5375,0.475,0.0,0.1,0.3,0.8678,0.8714,-0.0036,-0.0003,0.52,0.4333,0.376,0.0,0.014,0.0,cuda
