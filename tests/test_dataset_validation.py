@@ -320,6 +320,32 @@ def test_metadata_templates_prepared_for_future_experiments(
         assert "tenure_years" in ratio_feats
 
 
+def test_merchant_names_present_in_case_descriptions(examples: list[dict[str, Any]]):
+    """Audit check: Verify every example contains its merchant name in the case description."""
+    for ex in examples:
+        merch = ex["metadata"]["merchant"]
+        desc = ex["case_description"]
+        assert merch in desc, (
+            f"Merchant '{merch}' omitted from case_description in {ex['example_id']}"
+        )
+
+
+def test_ratio_verbalized_mathematical_consistency(examples: list[dict[str, Any]]):
+    """Audit check: Verify verbalized percentage matches numeric ratio feature."""
+    for ex in examples:
+        meta = ex["metadata"]
+        ratio_desc = meta["ratio_verbalized_description"]
+        feat_ratio = meta["ratio_features"]["dispute_to_lifetime_tx_ratio"]
+
+        match = re.search(r"(\d+\.\d+)%\s*lifetime dispute rate", ratio_desc)
+        assert match is not None, f"Pattern missing in {ex['example_id']}"
+        desc_pct = float(match.group(1))
+        expected_pct = round(feat_ratio * 100.0, 1)
+        assert abs(desc_pct - expected_pct) <= 0.15, (
+            f"Ratio discrepancy in {ex['example_id']}: verbalized {desc_pct}% vs feature {expected_pct}%"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Test Group 4: Integrated Validation Script Test
 # ---------------------------------------------------------------------------

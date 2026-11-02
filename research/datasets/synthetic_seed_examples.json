@@ -148,7 +148,7 @@
           "refund_window_expired"
         ],
         "raw_value_description": "Transaction amount is $175.25 at Urban Runner Apparel (apparel). Customer tenure is 18 months with 1 prior disputes. Dispute initiated 22 days following transaction settlement. Evidence: Confirmed delivery of returned merchandise to warehouse; merchant failed to credit within SLA.",
-        "ratio_verbalized_description": "Claim on Urban Runner Apparel (apparel) involves a $175.25 charge. Customer history reflects a 1.9% lifetime dispute rate over 18 months. Dispute filing consumed 36.7% of the allowable 60-day submission timeframe. Evidence signals: Confirmed delivery of returned merchandise to warehouse; merchant failed to credit within SLA.",
+        "ratio_verbalized_description": "Claim on Urban Runner Apparel (apparel) involves a $175.25 charge. Customer history reflects a 1.4% lifetime dispute rate over 18 months. Dispute filing consumed 36.7% of the allowable 60-day submission timeframe. Evidence signals: Confirmed delivery of returned merchandise to warehouse; merchant failed to credit within SLA.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0139,
           "dispute_filing_to_statutory_window_ratio": 0.3667,
@@ -237,7 +237,7 @@
       "source": "synthetic",
       "status": "active",
       "metadata": {
-        "category": "goods_not_received",
+        "category": "credit_not_processed",
         "case_type": "straightforward",
         "contrastive_pair_id": null,
         "transaction_id": "tx_syn_0007",
@@ -393,7 +393,7 @@
           "household_signature_match"
         ],
         "raw_value_description": "Transaction amount is $329.00 at Gadget Hub Online (electronics). Customer tenure is 14 months with 2 prior disputes. Dispute initiated 16 days following transaction settlement. Evidence: Carrier confirms signed delivery matching cardholder surname with GPS coordinates at billing address.",
-        "ratio_verbalized_description": "Claim on Gadget Hub Online (electronics) involves a $329.00 charge. Customer history reflects a 4.8% lifetime dispute rate over 14 months. Dispute filing consumed 26.7% of the allowable 60-day submission timeframe. Evidence signals: Carrier confirms signed delivery matching cardholder surname with GPS coordinates at billing address.",
+        "ratio_verbalized_description": "Claim on Gadget Hub Online (electronics) involves a $329.00 charge. Customer history reflects a 3.6% lifetime dispute rate over 14 months. Dispute filing consumed 26.7% of the allowable 60-day submission timeframe. Evidence signals: Carrier confirms signed delivery matching cardholder surname with GPS coordinates at billing address.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0357,
           "dispute_filing_to_statutory_window_ratio": 0.2667,
@@ -407,7 +407,7 @@
       "example_id": "ref-example-012",
       "tenant_id": "00000000-0000-0000-0000-000000000001",
       "agent_id": "00000000-0000-0000-0000-000000000002",
-      "case_description": "Cardholder claims an unauthorized $500.00 cash withdrawal occurred at an ATM terminal in their neighborhood. Terminal audit logs confirm the transaction was authenticated using the physical EMV chip card and verified offline PIN on the first entry attempt, with zero prior incorrect attempts. The card remained in cardholder possession before and after.",
+      "case_description": "Cardholder claims an unauthorized $500.00 cash withdrawal occurred at a First National ATM Network terminal in their neighborhood. Terminal audit logs confirm the transaction was authenticated using the physical EMV chip card and verified offline PIN on the first entry attempt, with zero prior incorrect attempts. The card remained in cardholder possession before and after.",
       "label": "REJECT",
       "source": "synthetic",
       "status": "active",
@@ -428,7 +428,7 @@
           "zero_pin_tries_failed"
         ],
         "raw_value_description": "Transaction amount is $500.00 at First National ATM Network (atm_cash). Customer tenure is 32 months with 1 prior disputes. Dispute initiated 5 days following transaction settlement. Evidence: Physical EMV chip transaction authenticated by correct cardholder PIN on first entry.",
-        "ratio_verbalized_description": "Claim on First National ATM Network (atm_cash) involves a $500.00 charge. Customer history reflects a 1.0% lifetime dispute rate over 32 months. Dispute filing consumed 8.3% of the allowable 60-day submission timeframe. Evidence signals: Physical EMV chip transaction authenticated by correct cardholder PIN on first entry.",
+        "ratio_verbalized_description": "Claim on First National ATM Network (atm_cash) involves a $500.00 charge. Customer history reflects a 0.8% lifetime dispute rate over 32 months. Dispute filing consumed 8.3% of the allowable 60-day submission timeframe. Evidence signals: Physical EMV chip transaction authenticated by correct cardholder PIN on first entry.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0078,
           "dispute_filing_to_statutory_window_ratio": 0.0833,
@@ -498,7 +498,7 @@
           "cardholder_phone_gps"
         ],
         "raw_value_description": "Transaction amount is $85.00 at Prime Ride Dispatch (transportation). Customer tenure is 26 months with 1 prior disputes. Dispute initiated 10 days following transaction settlement. Evidence: Ride initiated on cardholder phone via Face ID; route directly connected home and workplace.",
-        "ratio_verbalized_description": "Claim on Prime Ride Dispatch (transportation) involves a $85.00 charge. Customer history reflects a 1.3% lifetime dispute rate over 26 months. Dispute filing consumed 16.7% of the allowable 60-day submission timeframe. Evidence signals: Ride initiated on cardholder phone via Face ID; route directly connected home and workplace.",
+        "ratio_verbalized_description": "Claim on Prime Ride Dispatch (transportation) involves a $85.00 charge. Customer history reflects a 1.0% lifetime dispute rate over 26 months. Dispute filing consumed 16.7% of the allowable 60-day submission timeframe. Evidence signals: Ride initiated on cardholder phone via Face ID; route directly connected home and workplace.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0096,
           "dispute_filing_to_statutory_window_ratio": 0.1667,
@@ -512,7 +512,7 @@
       "example_id": "ref-example-015",
       "tenant_id": "00000000-0000-0000-0000-000000000001",
       "agent_id": "00000000-0000-0000-0000-000000000002",
-      "case_description": "Customer purchased discontinued ski boots for $450.00 during an online liquidation sale. Customer filed a dispute claiming the boots did not fit comfortably. The checkout invoice prominently displays a bold 'Final Sale - No Returns Accepted' checkbox that the customer checked, and the customer refused the merchant's request to return the boots for examination.",
+      "case_description": "Customer purchased discontinued ski boots for $450.00 during an online liquidation sale with Alpine Gear Clearance. Customer filed a dispute claiming the boots did not fit comfortably. The checkout invoice prominently displays a bold 'Final Sale - No Returns Accepted' checkbox that the customer checked, and the customer refused the merchant's request to return the boots for examination.",
       "label": "REJECT",
       "source": "synthetic",
       "status": "active",
@@ -547,7 +547,7 @@
       "example_id": "ref-example-016",
       "tenant_id": "00000000-0000-0000-0000-000000000001",
       "agent_id": "00000000-0000-0000-0000-000000000002",
-      "case_description": "Customer disputes a $29.99 monthly fitness app membership fee claiming they canceled the subscription months ago. Merchant server logs demonstrate the customer logged into the application 22 times during the disputed billing month, completed 14 workout sessions, and never submitted a cancellation request via the in-app portal or support email.",
+      "case_description": "Customer disputes a $29.99 monthly fitness app membership fee with FitPulse Online Gym claiming they canceled the subscription months ago. Merchant server logs demonstrate the customer logged into the application 22 times during the disputed billing month, completed 14 workout sessions, and never submitted a cancellation request via the in-app portal or support email.",
       "label": "REJECT",
       "source": "synthetic",
       "status": "active",
@@ -587,7 +587,7 @@
       "source": "synthetic",
       "status": "active",
       "metadata": {
-        "category": "goods_not_received",
+        "category": "unauthorized_transaction",
         "case_type": "straightforward",
         "contrastive_pair_id": null,
         "transaction_id": "tx_syn_0017",
@@ -638,7 +638,7 @@
           "friendly_fraud_pattern"
         ],
         "raw_value_description": "Transaction amount is $210.00 at PixelCraft Game Studios (gaming). Customer tenure is 19 months with 4 prior disputes. Dispute initiated 35 days following transaction settlement. Evidence: Transactions executed from family residential console; history of 4 repeated friendly fraud claims.",
-        "ratio_verbalized_description": "Claim on PixelCraft Game Studios (gaming) involves a $210.00 charge. Customer history reflects a 7.0% lifetime dispute rate over 19 months. Dispute filing consumed 58.3% of the allowable 60-day submission timeframe. Evidence signals: Transactions executed from family residential console; history of 4 repeated friendly fraud claims.",
+        "ratio_verbalized_description": "Claim on PixelCraft Game Studios (gaming) involves a $210.00 charge. Customer history reflects a 5.3% lifetime dispute rate over 19 months. Dispute filing consumed 58.3% of the allowable 60-day submission timeframe. Evidence signals: Transactions executed from family residential console; history of 4 repeated friendly fraud claims.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0526,
           "dispute_filing_to_statutory_window_ratio": 0.5833,
@@ -778,7 +778,7 @@
           "high_theft_apartment_complex"
         ],
         "raw_value_description": "Transaction amount is $139.00 at Urban Denim Supply (apparel). Customer tenure is 16 months with 1 prior disputes. Dispute initiated 14 days following transaction settlement. Evidence: Parcel dropped in unsecured multi-unit lobby without recipient signature; tenant filed theft affidavit.",
-        "ratio_verbalized_description": "Claim on Urban Denim Supply (apparel) involves a $139.00 charge. Customer history reflects a 2.1% lifetime dispute rate over 16 months. Dispute filing consumed 23.3% of the allowable 60-day submission timeframe. Evidence signals: Parcel dropped in unsecured multi-unit lobby without recipient signature; tenant filed theft affidavit.",
+        "ratio_verbalized_description": "Claim on Urban Denim Supply (apparel) involves a $139.00 charge. Customer history reflects a 1.6% lifetime dispute rate over 16 months. Dispute filing consumed 23.3% of the allowable 60-day submission timeframe. Evidence signals: Parcel dropped in unsecured multi-unit lobby without recipient signature; tenant filed theft affidavit.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0156,
           "dispute_filing_to_statutory_window_ratio": 0.2333,
@@ -1128,7 +1128,7 @@
           "no_police_theft_report"
         ],
         "raw_value_description": "Transaction amount is $115.00 at Metro Parcel Boutique (retail). Customer tenure is 17 months with 2 prior disputes. Dispute initiated 12 days following transaction settlement. Evidence: Carrier photo confirms delivery to cardholder steps; customer claims porch theft with no police report.",
-        "ratio_verbalized_description": "Claim on Metro Parcel Boutique (retail) involves a $115.00 charge. Customer history reflects a 3.9% lifetime dispute rate over 17 months. Dispute filing consumed 20.0% of the allowable 60-day submission timeframe. Evidence signals: Carrier photo confirms delivery to cardholder steps; customer claims porch theft with no police report.",
+        "ratio_verbalized_description": "Claim on Metro Parcel Boutique (retail) involves a $115.00 charge. Customer history reflects a 2.9% lifetime dispute rate over 17 months. Dispute filing consumed 20.0% of the allowable 60-day submission timeframe. Evidence signals: Carrier photo confirms delivery to cardholder steps; customer claims porch theft with no police report.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0294,
           "dispute_filing_to_statutory_window_ratio": 0.2,
@@ -1163,7 +1163,7 @@
           "terms_require_48h_notice"
         ],
         "raw_value_description": "Transaction amount is $45.00 at ProStream Cloud Network (digital_goods). Customer tenure is 15 months with 1 prior disputes. Dispute initiated 4 days following transaction settlement. Evidence: Canceled 2 days post-renewal; account accessed and utilized for media streaming after renewal.",
-        "ratio_verbalized_description": "Claim on ProStream Cloud Network (digital_goods) involves a $45.00 charge. Customer history reflects a 2.2% lifetime dispute rate over 15 months. Dispute filing consumed 6.7% of the allowable 60-day submission timeframe. Evidence signals: Canceled 2 days post-renewal; account accessed and utilized for media streaming after renewal.",
+        "ratio_verbalized_description": "Claim on ProStream Cloud Network (digital_goods) involves a $45.00 charge. Customer history reflects a 1.7% lifetime dispute rate over 15 months. Dispute filing consumed 6.7% of the allowable 60-day submission timeframe. Evidence signals: Canceled 2 days post-renewal; account accessed and utilized for media streaming after renewal.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0167,
           "dispute_filing_to_statutory_window_ratio": 0.0667,
@@ -1392,7 +1392,7 @@
       "source": "synthetic",
       "status": "active",
       "metadata": {
-        "category": "goods_not_received",
+        "category": "credit_not_processed",
         "case_type": "borderline",
         "contrastive_pair_id": null,
         "transaction_id": "tx_syn_0040",
@@ -1548,7 +1548,7 @@
           "single_receipt_provided"
         ],
         "raw_value_description": "Transaction amount is $125.00 at Cascade Mountain Outfitters (apparel). Customer tenure is 27 months with 1 prior disputes. Dispute initiated 6 days following transaction settlement. Evidence: Merchant verified single order but provided zero evidence supporting the second settled charge.",
-        "ratio_verbalized_description": "Claim on Cascade Mountain Outfitters (apparel) involves a $125.00 charge. Customer history reflects a 1.2% lifetime dispute rate over 27 months. Dispute filing consumed 10.0% of the allowable 60-day submission timeframe. Evidence signals: Merchant verified single order but provided zero evidence supporting the second settled charge.",
+        "ratio_verbalized_description": "Claim on Cascade Mountain Outfitters (apparel) involves a $125.00 charge. Customer history reflects a 0.9% lifetime dispute rate over 27 months. Dispute filing consumed 10.0% of the allowable 60-day submission timeframe. Evidence signals: Merchant verified single order but provided zero evidence supporting the second settled charge.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0093,
           "dispute_filing_to_statutory_window_ratio": 0.1,
@@ -1793,7 +1793,7 @@
           "unsubstantiated_defect"
         ],
         "raw_value_description": "Transaction amount is $750.00 at Titan Gaming Rigs (computers). Customer tenure is 14 months with 1 prior disputes. Dispute initiated 20 days following transaction settlement. Evidence: Customer refused to provide any photos, error logs, or inspection proof of alleged hardware defect.",
-        "ratio_verbalized_description": "Claim on Titan Gaming Rigs (computers) involves a $750.00 charge. Customer history reflects a 2.4% lifetime dispute rate over 14 months. Dispute filing consumed 33.3% of the allowable 60-day submission timeframe. Evidence signals: Customer refused to provide any photos, error logs, or inspection proof of alleged hardware defect.",
+        "ratio_verbalized_description": "Claim on Titan Gaming Rigs (computers) involves a $750.00 charge. Customer history reflects a 1.8% lifetime dispute rate over 14 months. Dispute filing consumed 33.3% of the allowable 60-day submission timeframe. Evidence signals: Customer refused to provide any photos, error logs, or inspection proof of alleged hardware defect.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0179,
           "dispute_filing_to_statutory_window_ratio": 0.3333,
@@ -1828,7 +1828,7 @@
           "no_police_report"
         ],
         "raw_value_description": "Transaction amount is $820.00 at Omni Jewelers Online (luxury_goods). Customer tenure is 9 months with 2 prior disputes. Dispute initiated 15 days following transaction settlement. Evidence: Customer refused to sign fraud affidavit or report alleged grand theft to law enforcement.",
-        "ratio_verbalized_description": "Claim on Omni Jewelers Online (luxury_goods) involves a $820.00 charge. Customer history reflects a 7.4% lifetime dispute rate over 9 months. Dispute filing consumed 25.0% of the allowable 60-day submission timeframe. Evidence signals: Customer refused to sign fraud affidavit or report alleged grand theft to law enforcement.",
+        "ratio_verbalized_description": "Claim on Omni Jewelers Online (luxury_goods) involves a $820.00 charge. Customer history reflects a 5.6% lifetime dispute rate over 9 months. Dispute filing consumed 25.0% of the allowable 60-day submission timeframe. Evidence signals: Customer refused to sign fraud affidavit or report alleged grand theft to law enforcement.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0556,
           "dispute_filing_to_statutory_window_ratio": 0.25,
@@ -1877,7 +1877,7 @@
       "example_id": "ref-example-054",
       "tenant_id": "00000000-0000-0000-0000-000000000001",
       "agent_id": "00000000-0000-0000-0000-000000000002",
-      "case_description": "Customer disputes a $110.00 rental car cleaning fee claiming an agent verbally promised on the phone to waive it. The customer could provide no confirmation number, agent name, email correspondence, or written waiver. Merchant records show photos of excessive interior staining and a signed rental contract authorizing detailed cleaning fees.",
+      "case_description": "Customer disputes a $110.00 rental car cleaning fee from Apex Rental Car Services claiming an agent verbally promised on the phone to waive it. The customer could provide no confirmation number, agent name, email correspondence, or written waiver. Merchant records show photos of excessive interior staining and a signed rental contract authorizing detailed cleaning fees.",
       "label": "REJECT",
       "source": "synthetic",
       "status": "active",
@@ -1933,7 +1933,7 @@
           "refused_authentication"
         ],
         "raw_value_description": "Transaction amount is $380.00 at SneakerVault Exclusive (apparel). Customer tenure is 13 months with 1 prior disputes. Dispute initiated 18 days following transaction settlement. Evidence: Customer claims sneakers counterfeit but refuses third-party authentication inspection.",
-        "ratio_verbalized_description": "Claim on SneakerVault Exclusive (apparel) involves a $380.00 charge. Customer history reflects a 2.6% lifetime dispute rate over 13 months. Dispute filing consumed 30.0% of the allowable 60-day submission timeframe. Evidence signals: Customer claims sneakers counterfeit but refuses third-party authentication inspection.",
+        "ratio_verbalized_description": "Claim on SneakerVault Exclusive (apparel) involves a $380.00 charge. Customer history reflects a 1.9% lifetime dispute rate over 13 months. Dispute filing consumed 30.0% of the allowable 60-day submission timeframe. Evidence signals: Customer claims sneakers counterfeit but refuses third-party authentication inspection.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0192,
           "dispute_filing_to_statutory_window_ratio": 0.3,
@@ -2372,7 +2372,7 @@
       "source": "synthetic",
       "status": "active",
       "metadata": {
-        "category": "goods_not_received",
+        "category": "credit_not_processed",
         "case_type": "conflicting_signals",
         "contrastive_pair_id": null,
         "transaction_id": "tx_syn_0068",
@@ -2493,7 +2493,7 @@
           "biometric_faceid_apple_pay_match"
         ],
         "raw_value_description": "Transaction amount is $1400.00 at Haute Couture Paris (luxury_goods). Customer tenure is 22 months with 1 prior disputes. Dispute initiated 14 days following transaction settlement. Evidence: Unrecognized shipping destination, but transaction authenticated via primary iPhone Face ID and sent to sibling.",
-        "ratio_verbalized_description": "Claim on Haute Couture Paris (luxury_goods) involves a $1400.00 charge. Customer history reflects a 1.5% lifetime dispute rate over 22 months. Dispute filing consumed 23.3% of the allowable 60-day submission timeframe. Evidence signals: Unrecognized shipping destination, but transaction authenticated via primary iPhone Face ID and sent to sibling.",
+        "ratio_verbalized_description": "Claim on Haute Couture Paris (luxury_goods) involves a $1400.00 charge. Customer history reflects a 1.1% lifetime dispute rate over 22 months. Dispute filing consumed 23.3% of the allowable 60-day submission timeframe. Evidence signals: Unrecognized shipping destination, but transaction authenticated via primary iPhone Face ID and sent to sibling.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0114,
           "dispute_filing_to_statutory_window_ratio": 0.2333,
@@ -2528,7 +2528,7 @@
           "public_social_media_photo_wearing_item"
         ],
         "raw_value_description": "Transaction amount is $450.00 at Apex Outerwear Direct (apparel). Customer tenure is 16 months with 1 prior disputes. Dispute initiated 18 days following transaction settlement. Evidence: Carrier lacked signature, but public social media post shows cardholder wearing unique custom parka.",
-        "ratio_verbalized_description": "Claim on Apex Outerwear Direct (apparel) involves a $450.00 charge. Customer history reflects a 2.1% lifetime dispute rate over 16 months. Dispute filing consumed 30.0% of the allowable 60-day submission timeframe. Evidence signals: Carrier lacked signature, but public social media post shows cardholder wearing unique custom parka.",
+        "ratio_verbalized_description": "Claim on Apex Outerwear Direct (apparel) involves a $450.00 charge. Customer history reflects a 1.6% lifetime dispute rate over 16 months. Dispute filing consumed 30.0% of the allowable 60-day submission timeframe. Evidence signals: Carrier lacked signature, but public social media post shows cardholder wearing unique custom parka.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0156,
           "dispute_filing_to_statutory_window_ratio": 0.3,
@@ -2738,7 +2738,7 @@
           "household_dependent_match"
         ],
         "raw_value_description": "Transaction amount is $260.00 at TechEdge Hardware Store (electronics). Customer tenure is 15 months with 2 prior disputes. Dispute initiated 14 days following transaction settlement. Evidence: Order delivered to cardholder address and accepted by dependent residing in home.",
-        "ratio_verbalized_description": "Claim on TechEdge Hardware Store (electronics) involves a $260.00 charge. Customer history reflects a 4.4% lifetime dispute rate over 15 months. Dispute filing consumed 23.3% of the allowable 60-day submission timeframe. Evidence signals: Order delivered to cardholder address and accepted by dependent residing in home.",
+        "ratio_verbalized_description": "Claim on TechEdge Hardware Store (electronics) involves a $260.00 charge. Customer history reflects a 3.3% lifetime dispute rate over 15 months. Dispute filing consumed 23.3% of the allowable 60-day submission timeframe. Evidence signals: Order delivered to cardholder address and accepted by dependent residing in home.",
         "ratio_features": {
           "dispute_to_lifetime_tx_ratio": 0.0333,
           "dispute_filing_to_statutory_window_ratio": 0.2333,
@@ -2792,7 +2792,7 @@
       "source": "synthetic",
       "status": "active",
       "metadata": {
-        "category": "goods_not_received",
+        "category": "credit_not_processed",
         "case_type": "conflicting_signals",
         "contrastive_pair_id": null,
         "transaction_id": "tx_syn_0080",
@@ -3103,7 +3103,7 @@
       "example_id": "ref-example-089",
       "tenant_id": "00000000-0000-0000-0000-000000000001",
       "agent_id": "00000000-0000-0000-0000-000000000002",
-      "case_description": "Customer was charged $55.00 for recurring cloud sync software on November 1st at 12:05 AM. Merchant account audit logs confirm the customer submitted their cancellation at 11:40 PM on October 31st, 25 minutes prior to the midnight billing cycle. An automated batch processing race condition executed the charge despite the pending cancellation queue.",
+      "case_description": "Customer was charged $55.00 for recurring cloud sync software from CloudSync Enterprise on November 1st at 12:05 AM. Merchant account audit logs confirm the customer submitted their cancellation at 11:40 PM on October 31st, 25 minutes prior to the midnight billing cycle. An automated batch processing race condition executed the charge despite the pending cancellation queue.",
       "label": "APPROVE",
       "source": "synthetic",
       "status": "active",
@@ -3138,7 +3138,7 @@
       "example_id": "ref-example-090",
       "tenant_id": "00000000-0000-0000-0000-000000000001",
       "agent_id": "00000000-0000-0000-0000-000000000002",
-      "case_description": "Customer was charged $55.00 for recurring cloud sync software on November 1st at 12:05 AM. Merchant account audit logs confirm the customer submitted their cancellation at 12:50 AM on November 1st, 45 minutes after the monthly renewal had successfully executed and renewed the service period.",
+      "case_description": "Customer was charged $55.00 for recurring cloud sync software from CloudSync Enterprise on November 1st at 12:05 AM. Merchant account audit logs confirm the customer submitted their cancellation at 12:50 AM on November 1st, 45 minutes after the monthly renewal had successfully executed and renewed the service period.",
       "label": "REJECT",
       "source": "synthetic",
       "status": "active",
@@ -3248,7 +3248,7 @@
       "source": "synthetic",
       "status": "active",
       "metadata": {
-        "category": "goods_not_received",
+        "category": "credit_not_processed",
         "case_type": "contrastive_pair",
         "contrastive_pair_id": "pair_07_digital_activation",
         "transaction_id": "tx_syn_0093",
@@ -3283,7 +3283,7 @@
       "source": "synthetic",
       "status": "active",
       "metadata": {
-        "category": "goods_not_received",
+        "category": "credit_not_processed",
         "case_type": "contrastive_pair",
         "contrastive_pair_id": "pair_07_digital_activation",
         "transaction_id": "tx_syn_0094",

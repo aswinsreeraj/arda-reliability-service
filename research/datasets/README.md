@@ -11,6 +11,9 @@ This dataset constitutes the foundational **synthetic reference dataset** for th
 
 All examples represent adjudicated historical cases within a single tenant and agent scope, providing ground truth for similarity-based reliability gating.
 
+- **Adjudication Policy**: See [`synthetic_adjudication_policy.md`](file:///home/aswin/second-project/arda-reliability-service/research/datasets/synthetic_adjudication_policy.md) for full procedural timelines, evidentiary burdens, and authentication hierarchies.
+- **Semantic Audit Report**: See [`semantic_audit_report.md`](file:///home/aswin/second-project/arda-reliability-service/research/datasets/semantic_audit_report.md) for the complete semantic consistency and domain evaluation audit.
+
 ---
 
 ## 2. Critical Separation Rule: Embedding vs. Decision Isolation

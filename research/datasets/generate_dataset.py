@@ -36,6 +36,11 @@ def build_raw_template(
     )
 
 
+def get_estimated_lifetime_transactions(tenure: int) -> int:
+    """Calculate normalized estimated lifetime transaction volume with a safe minimum floor."""
+    return max(10, tenure * 4)
+
+
 def build_ratio_template(
     amount: float,
     tenure: int,
@@ -46,7 +51,8 @@ def build_ratio_template(
     evidence_summary: str,
 ) -> str:
     """Standardized ratio-verbalized description template for embedding experiments."""
-    dispute_ratio = (prior_disputes / max(1, tenure * 3)) * 100.0
+    lifetime_tx = get_estimated_lifetime_transactions(tenure)
+    dispute_ratio = (prior_disputes / lifetime_tx) * 100.0
     statutory_pct = (delay_days / 60.0) * 100.0
     return (
         f"Claim on {merchant} ({category}) involves a ${amount:.2f} charge. "
@@ -63,9 +69,9 @@ def compute_ratio_features(
     delay_days: int,
 ) -> dict[str, float]:
     """Calculate normalized ratios for experimental feature comparison."""
-    lifetime_tx_estimate = max(1, tenure * 4)
+    lifetime_tx = get_estimated_lifetime_transactions(tenure)
     return {
-        "dispute_to_lifetime_tx_ratio": round(prior_disputes / lifetime_tx_estimate, 4),
+        "dispute_to_lifetime_tx_ratio": round(prior_disputes / lifetime_tx, 4),
         "dispute_filing_to_statutory_window_ratio": round(delay_days / 60.0, 4),
         "amount_to_median_transaction_ratio": round(amount / 125.0, 4),
         "tenure_years": round(tenure / 12.0, 2),
@@ -236,7 +242,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
         {
             "id_num": 7,
             "case_type": "straightforward",
-            "category": "goods_not_received",
+            "category": "credit_not_processed",
             "label": "APPROVE",
             "amount": 420.00,
             "merchant": "Skyline Express Airways",
@@ -377,7 +383,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
             "delay_days": 5,
             "evidence_signals": ["emv_chip_and_pin_verified", "zero_pin_tries_failed"],
             "case_description": (
-                "Cardholder claims an unauthorized $500.00 cash withdrawal occurred at an ATM terminal in their neighborhood. "
+                "Cardholder claims an unauthorized $500.00 cash withdrawal occurred at a First National ATM Network terminal in their neighborhood. "
                 "Terminal audit logs confirm the transaction was authenticated using the physical EMV chip card and verified offline PIN "
                 "on the first entry attempt, with zero prior incorrect attempts. The card remained in cardholder possession before and after."
             ),
@@ -448,7 +454,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
                 "cardholder_refusal_to_return",
             ],
             "case_description": (
-                "Customer purchased discontinued ski boots for $450.00 during an online liquidation sale. Customer filed a dispute claiming "
+                "Customer purchased discontinued ski boots for $450.00 during an online liquidation sale with Alpine Gear Clearance. Customer filed a dispute claiming "
                 "the boots did not fit comfortably. The checkout invoice prominently displays a bold 'Final Sale - No Returns Accepted' "
                 "checkbox that the customer checked, and the customer refused the merchant's request to return the boots for examination."
             ),
@@ -474,7 +480,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
                 "zero_cancellation_request_record",
             ],
             "case_description": (
-                "Customer disputes a $29.99 monthly fitness app membership fee claiming they canceled the subscription months ago. "
+                "Customer disputes a $29.99 monthly fitness app membership fee with FitPulse Online Gym claiming they canceled the subscription months ago. "
                 "Merchant server logs demonstrate the customer logged into the application 22 times during the disputed billing month, "
                 "completed 14 workout sessions, and never submitted a cancellation request via the in-app portal or support email."
             ),
@@ -486,7 +492,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
         {
             "id_num": 17,
             "case_type": "straightforward",
-            "category": "goods_not_received",
+            "category": "unauthorized_transaction",
             "label": "REJECT",
             "amount": 95.00,
             "merchant": "Gourmet Bistro & Grill",
@@ -1071,7 +1077,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
         {
             "id_num": 40,
             "case_type": "borderline",
-            "category": "goods_not_received",
+            "category": "credit_not_processed",
             "label": "REJECT",
             "amount": 215.00,
             "merchant": "SwiftAir Regional",
@@ -1443,7 +1449,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
                 "zero_written_evidence",
             ],
             "case_description": (
-                "Customer disputes a $110.00 rental car cleaning fee claiming an agent verbally promised on the phone to waive it. "
+                "Customer disputes a $110.00 rental car cleaning fee from Apex Rental Car Services claiming an agent verbally promised on the phone to waive it. "
                 "The customer could provide no confirmation number, agent name, email correspondence, or written waiver. "
                 "Merchant records show photos of excessive interior staining and a signed rental contract authorizing detailed cleaning fees."
             ),
@@ -1786,7 +1792,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
         {
             "id_num": 68,
             "case_type": "conflicting_signals",
-            "category": "goods_not_received",
+            "category": "credit_not_processed",
             "label": "APPROVE",
             "amount": 475.00,
             "merchant": "Island Paradise Resort",
@@ -2090,7 +2096,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
         {
             "id_num": 80,
             "case_type": "conflicting_signals",
-            "category": "goods_not_received",
+            "category": "credit_not_processed",
             "label": "REJECT",
             "amount": 950.00,
             "merchant": "Fintech Summit International",
@@ -2340,7 +2346,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
                 "system_billing_race_condition",
             ],
             "case_description": (
-                "Customer was charged $55.00 for recurring cloud sync software on November 1st at 12:05 AM. Merchant account audit logs "
+                "Customer was charged $55.00 for recurring cloud sync software from CloudSync Enterprise on November 1st at 12:05 AM. Merchant account audit logs "
                 "confirm the customer submitted their cancellation at 11:40 PM on October 31st, 25 minutes prior to the midnight billing cycle. "
                 "An automated batch processing race condition executed the charge despite the pending cancellation queue."
             ),
@@ -2366,7 +2372,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
                 "valid_renewal_charge",
             ],
             "case_description": (
-                "Customer was charged $55.00 for recurring cloud sync software on November 1st at 12:05 AM. Merchant account audit logs "
+                "Customer was charged $55.00 for recurring cloud sync software from CloudSync Enterprise on November 1st at 12:05 AM. Merchant account audit logs "
                 "confirm the customer submitted their cancellation at 12:50 AM on November 1st, 45 minutes after the monthly renewal had "
                 "successfully executed and renewed the service period."
             ),
@@ -2433,7 +2439,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
             "id_num": 93,
             "case_type": "contrastive_pair",
             "contrastive_pair_id": "pair_07_digital_activation",
-            "category": "goods_not_received",
+            "category": "credit_not_processed",
             "label": "APPROVE",
             "amount": 150.00,
             "merchant": "VFX Studio Tools",
@@ -2456,7 +2462,7 @@ def get_raw_seed_data() -> list[dict[str, Any]]:
             "id_num": 94,
             "case_type": "contrastive_pair",
             "contrastive_pair_id": "pair_07_digital_activation",
-            "category": "goods_not_received",
+            "category": "credit_not_processed",
             "label": "REJECT",
             "amount": 150.00,
             "merchant": "VFX Studio Tools",
