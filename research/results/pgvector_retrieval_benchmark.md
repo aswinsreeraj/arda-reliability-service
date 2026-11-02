@@ -1,110 +1,82 @@
 # ARDA Reliability Service — Vector Retrieval Benchmark Report
-## Exact Cosine Retrieval vs. HNSW Approximate Nearest Neighbors (pgvector)
 
-**Date**: November 2, 2026  
-**Scope**: Development Week 3 — PostgreSQL, pgvector & HNSW Retrieval Infrastructure  
-**Dataset**: [`research/datasets/synthetic_seed_examples.json`](file:///home/aswin/second-project/arda-reliability-service/research/datasets/synthetic_seed_examples.json) ($N=100$, Audited Reference Seed)  
-**Database**: PostgreSQL 16.15 + pgvector 0.8.7 (`arda-reliability-postgres`)  
-**Embedding Model**: `BAAI/bge-small-en-v1.5` (384-dimensional dense vectors)  
-
----
-
-## 1. Executive Summary
-
-This report establishes the empirical performance, recall fidelity, and query latencies of **pgvector** vector storage under the ARDA Reliability Service.
-
-We benchmarked **Exact Cosine Retrieval** (flat scan over tenant-filtered candidates) against **HNSW Approximate Nearest Neighbors Retrieval** across $K \in \{1, 3, 5, 10\}$ and across varying index search configurations (`ef_search` $\in \{16, 32, 64, 128\}$).
-
-### Key Empirical Findings:
-1. **100% Recall Fidelity**: Across all 100 queries and all evaluated values of $K \in \{1, 3, 5, 10\}$, HNSW approximate retrieval achieves **100.0% Recall@K** relative to exact ground truth for all `ef_search` settings $\ge 16$.
-2. **Sub-Millisecond Database Execution**:
-   - Exact flat scan query latency: **49.26 ms** median, **63.69 ms** P95.
-   - HNSW approximate query latency (ef=64): **48.29 ms** median, **60.05 ms** P95.
-3. **Compact Index Storage**: The 384-dimensional HNSW index occupies only **208 kB** for 100 reference decisions (total table relation: **976 kB**).
-4. **Tenant Isolation Enforcement**: PostgreSQL btree composite index (`tenant_id`, `agent_id`, `status`) strictly pre-filters candidates, guaranteeing zero cross-tenant leakage.
+**Benchmark Date**: 2026-11-02 13:46:07 UTC
+**Database Engine**: PostgreSQL 16.15 with pgvector v0.8.7
+**Host/Port**: `127.0.0.1:5433` (Docker container: `arda-reliability-postgres`)
+**Provisional Embedding Model**: `BAAI/bge-small-en-v1.5` (Dimension: 384)
+**Operational Input Representation**: `ratio_verbalized_description`
 
 ---
 
-## 2. Storage & Index Footprint
+## 1. Executive Summary & Verification Outcomes
 
-| Component | Storage Size | Description |
-|---|:---:|---|
-| **HNSW Vector Index** (`idx_reference_examples_hnsw_cosine`) | **208 kB** | HNSW graph (`m=16`, `ef_construction=64`, `vector_cosine_ops`) |
-| **Table Data** (`reference_examples`) | **320 kB** | 100 rows with metadata JSONB, timestamps, text narratives |
-| **Total Relation Footprint** | **976 kB** | Table + all B-Tree & HNSW indexes |
-| **Active Stored Rows** | **100** | 100 audited synthetic seed examples |
+This report documents verified retrieval performance across dataset scales from $N=100$ to $N=10,000$, distinguishing exact ground truth, actual HNSW graph traversal, forced diagnostic execution, and normal PostgreSQL cost-based optimization.
 
----
-
-## 3. Recall@K Comparison: HNSW vs. Exact Ground Truth
-
-Recall@K measures the proportion of exact nearest neighbors retrieved by HNSW:
-$$\text{Recall@K} = \frac{|\text{Exact@K} \cap \text{Approx@K}|}{K}$$
-
-| Index Configuration | ef_search | Recall@1 | Recall@3 | Recall@5 | Recall@10 | Mean Recall |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Exact (Flat Scan)** | N/A | **100.0%** | **100.0%** | **100.0%** | **100.0%** | 100.0% |
-| **HNSW** ($m=16, ef_c=64$) | 16 | **100.0%** | **100.0%** | **100.0%** | **100.0%** | 100.0% |
-| **HNSW** ($m=16, ef_c=64$) | 32 | **100.0%** | **100.0%** | **100.0%** | **100.0%** | 100.0% |
-| **HNSW** ($m=16, ef_c=64$) | 64 | **100.0%** | **100.0%** | **100.0%** | **100.0%** | 100.0% |
-| **HNSW** ($m=16, ef_c=64$) | 128 | **100.0%** | **100.0%** | **100.0%** | **100.0%** | 100.0% |
+### Core Verification Discoveries
+- **Scale-Dependent Planner Selection**: For small partitions ($N=100$), PostgreSQL's optimizer chooses a B-tree index scan + in-memory Top-N heapsort because reading 19 heap pages is lower cost than the HNSW graph entry cost (43 vs 116). At scale ($N=10,000$), the optimizer **naturally and unconditionally chooses the HNSW index**.
+- **pgvector 0.8.x Iterative Scan Requirement**: In shared multi-agent tables, `hnsw.iterative_scan = strict_order` is mandatory to prevent graph search truncation on smaller partitions.
+- **HNSW Fidelity**: At $N=10,000$, HNSW with $m=16, ef\_construction=64, ef\_search=64$ achieves **98.8% Recall@5** and **98.2% Recall@10** with **0.75 ms** query execution time.
 
 ---
 
-## 4. Latency Distribution Comparison
+## 2. Multi-Scale Retrieval Performance Summary
 
-Measured over 100 queries $\times$ 3 iterations per query mode:
+| Partition Scale | Planner Mode | Index Utilized | Recall@1 | Recall@5 | Recall@10 | Database Execution | Total Pipeline (p50) |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **$N=100$** | Default Planner | B-Tree `idx_..._tenant_agent_status` | 100.0% | 100.0% | 100.0% | 0.28 ms | 11.2 ms |
+| **$N=100$** | Forced HNSW (Diag) | HNSW `idx_..._hnsw_cosine` | 100.0% | 100.0% | 100.0% | 0.12 ms | 10.9 ms |
+| **$N=1,000$** | Default (`iterative=off`) | HNSW `idx_..._hnsw_cosine` | 0.0%* | 0.0%* | 0.0%* | 2.44 ms | 13.5 ms |
+| **$N=1,000$** | HNSW (`iterative=strict`) | HNSW `idx_..._hnsw_cosine` | 99.1% | 98.9% | 98.4% | 1.39 ms | 12.6 ms |
+| **$N=10,000$** | Default Planner | HNSW `idx_..._hnsw_cosine` | 99.4% | 98.8% | 98.2% | 0.75 ms | 11.8 ms |
+| **$N=10,000$** | Forced Exact (Baseline) | Full Scan / B-tree Sort | 100.0% | 100.0% | 100.0% | 12.80 ms | 23.9 ms |
 
-| Retrieval Mode | ef_search | Mean Latency | Median (P50) | P95 Latency | P99 Latency |
-|---|:---:|:---:|:---:|:---:|:---:|
-| **Exact (Flat Scan)** | N/A | **50.01 ms** | **49.26 ms** | **63.69 ms** | **76.34 ms** |
-| **HNSW** | 16 | **46.64 ms** | **46.10 ms** | **56.22 ms** | **63.44 ms** |
-| **HNSW** | 32 | **45.33 ms** | **44.98 ms** | **54.20 ms** | **63.55 ms** |
-| **HNSW** | 64 | **48.65 ms** | **48.29 ms** | **60.05 ms** | **70.85 ms** |
-| **HNSW** | 128 | **47.05 ms** | **46.48 ms** | **55.99 ms** | **65.09 ms** |
-
----
-
-## 5. PostgreSQL Query Plan Inspection
-
-### Exact Plan (Flat Scan with Sequential Enforcement):
-```sql
-Limit  (cost=43.66..43.67 rows=5 width=39) (actual time=0.281..0.282 rows=5 loops=1)
-  ->  Sort  (cost=43.66..43.91 rows=100 width=39) (actual time=0.280..0.281 rows=5 loops=1)
-        Sort Key: ((embedding <=> '[-0.053969,-0.0014,0.042635,-0.003419,-0.011053,-0.058598,0.061477,0.024887,0.025414,0.002985,0.03969,0.023386,0.022103,-0.04536,0.02747,0.072068,0.029908,-0.131335,0.041135,0.045418,-0.000679,-0.062937,-0.004159,-0.022164,-0.042132,-0.000133,-0.0365,-0.000928,-0.026326,-0.146501,-0.007515,-0.005188,0.042371,0.021285,1.3e-05,-0.019258,-0.024861,-0.036668,0.028279,-0.003045,-0.01657,0.037617,-0.03631,-0.028239,-0.034564,-0.009204,0.042055,-0.060967,0.102788,0.016265,-0.007754,-0.012625,0.036183,0.014484,-0.039341,0.051096,0.054845,0.022767,0.045809,-0.027367,-0.018014,-0.032287,-0.109633,0.05023,-0.045583,-0.025753,-0.02192,-0.01278,-0.022782,0.007023,-0.044026,-0.027309,-0.02674,0.005329,0.037724,-0.017341,0.052594,0.051736,0.013282,0.017091,-0.008768,0.050942,-0.062573,0.029903,0.025528,-0.069529,0.083894,-0.004011,0.015759,0.035932,0.041331,0.046154,-0.04635,0.001515,-0.063498,-0.022056,-0.035109,-0.040096,-0.010238,0.361609,0.00395,0.060707,-0.020543,-0.042217,-0.001972,-0.036472,-0.014115,0.018264,-0.055917,-0.028511,-0.060495,0.034472,0.019815,-0.029112,-0.016088,0.147306,-0.013311,-0.022579,-0.004975,-0.041397,-0.058676,0.062805,0.020779,0.01306,-0.010681,-0.024134,0.022709,0.119171,-0.003298,0.017828,-0.013127,-0.064879,-0.009267,0.056709,0.061207,0.033436,0.032858,0.081684,0.017481,0.042527,0.017722,-0.030177,-0.02706,-0.011197,-0.087242,0.038322,0.010253,-0.00592,0.014155,-0.062817,-0.020759,0.014933,0.058419,-0.044412,-0.035683,0.048737,0.032917,-0.006979,-0.073729,0.025754,0.014887,-0.004807,0.023434,0.119958,0.03983,-0.144797,-0.008404,-0.018435,0.046819,-0.011899,0.007994,0.037495,0.017984,-0.083784,0.020758,-0.034383,0.026337,0.000954,0.022064,0.02878,0.026564,0.033896,-0.056123,-0.004327,0.058076,-0.04271,-0.054552,0.040701,-0.008147,-0.016508,-0.034493,-0.033972,-0.089512,0.103474,0.050261,-0.006982,-0.02807,-0.006165,0.023715,-0.01533,0.116876,-0.037665,0.016086,0.019796,0.011207,0.069737,-0.003051,-0.028788,-0.022638,-0.05356,-0.041871,0.010356,0.04933,-0.035445,-0.034704,0.014637,-0.001431,0.01857,0.02523,0.058218,-0.056673,-0.008419,0.057999,-0.292184,0.011119,-0.034557,0.019065,0.081856,0.026024,0.045272,-0.005725,0.040133,0.027143,0.060738,-0.001719,0.034038,-0.062749,-0.005981,-0.007702,0.045735,-0.005452,-0.035763,-0.038483,-0.040414,0.0231,-0.10379,0.014896,0.033481,0.08244,0.142008,-0.079953,-0.041189,-0.054574,0.021786,0.024901,0.015252,0.00194,0.008777,0.004841,-0.03153,-0.019464,0.011191,-0.002234,-0.06805,0.011728,0.024692,-0.014717,0.063152,-0.026754,-0.034964,0.053241,-0.033944,0.051912,-0.004324,-0.08467,0.047665,0.055792,0.032203,-0.049306,-0.015563,0.041398,-0.051837,0.027331,0.036044,-0.006087,0.043367,-0.04984,0.040355,0.032388,0.029647,-0.013294,-0.048436,-0.018325,-0.002376,0.101977,-0.007983,-0.089868,0.024907,0.019618,0.024591,0.00421,-0.014908,-0.025423,-0.024376,0.014248,0.024471,0.049223,0.021186,0.06841,0.058825,0.020226,0.007841,-0.050929,-0.003366,-0.042192,-0.025681,0.017193,-0.004838,0.018043,-0.233802,0.011762,-0.003028,0.01566,-0.025017,0.012963,0.029273,0.026295,-0.041742,0.004166,-0.017606,0.040414,-0.022628,-0.021888,0.06024,-0.02813,0.030399,-0.061362,0.013818,-0.011144,0.04444,-0.030445,0.089825,0.032187,-0.078088,0.000195,-0.008252,0.058661,0.038333,-0.019781,-0.041118,-0.06414,0.064756,0.024063,0.059643,-0.043323,-0.072813,0.055532,-0.022405,-0.014673,-0.061432,-0.085619,-0.007924,0.034198,0.007825,0.02504,-0.042745,-0.112953,-0.039934,-3.9e-05,-0.048273,-0.044608,0.060451,-0.025629,0.039296,-0.013769,-0.066957,-0.002482,0.024112,-0.054016,-0.03041,0.035016,-0.00125,0.031766,0.038794]'::vector)), created_at DESC, example_id
-        Sort Method: top-N heapsort  Memory: 25kB
-        ->  Seq Scan on reference_examples  (cost=0.00..42.00 rows=100 width=39) (actual time=0.016..0.246 rows=100 loops=1)
-              Filter: ((tenant_id = '00000000-0000-0000-0000-000000000001'::uuid) AND (agent_id = '00000000-0000-0000-0000-000000000002'::uuid) AND ((status)::text = 'active'::text))
-Planning Time: 0.091 ms
-Execution Time: 0.320 ms
-```
-
-### HNSW Approximate Plan (Index Scan):
-```sql
-Limit  (cost=10000000043.66..10000000043.67 rows=5 width=39) (actual time=98.652..98.661 rows=5 loops=1)
-  ->  Sort  (cost=10000000043.66..10000000043.91 rows=100 width=39) (actual time=0.339..0.340 rows=5 loops=1)
-        Sort Key: ((embedding <=> '[-0.053969,-0.0014,0.042635,-0.003419,-0.011053,-0.058598,0.061477,0.024887,0.025414,0.002985,0.03969,0.023386,0.022103,-0.04536,0.02747,0.072068,0.029908,-0.131335,0.041135,0.045418,-0.000679,-0.062937,-0.004159,-0.022164,-0.042132,-0.000133,-0.0365,-0.000928,-0.026326,-0.146501,-0.007515,-0.005188,0.042371,0.021285,1.3e-05,-0.019258,-0.024861,-0.036668,0.028279,-0.003045,-0.01657,0.037617,-0.03631,-0.028239,-0.034564,-0.009204,0.042055,-0.060967,0.102788,0.016265,-0.007754,-0.012625,0.036183,0.014484,-0.039341,0.051096,0.054845,0.022767,0.045809,-0.027367,-0.018014,-0.032287,-0.109633,0.05023,-0.045583,-0.025753,-0.02192,-0.01278,-0.022782,0.007023,-0.044026,-0.027309,-0.02674,0.005329,0.037724,-0.017341,0.052594,0.051736,0.013282,0.017091,-0.008768,0.050942,-0.062573,0.029903,0.025528,-0.069529,0.083894,-0.004011,0.015759,0.035932,0.041331,0.046154,-0.04635,0.001515,-0.063498,-0.022056,-0.035109,-0.040096,-0.010238,0.361609,0.00395,0.060707,-0.020543,-0.042217,-0.001972,-0.036472,-0.014115,0.018264,-0.055917,-0.028511,-0.060495,0.034472,0.019815,-0.029112,-0.016088,0.147306,-0.013311,-0.022579,-0.004975,-0.041397,-0.058676,0.062805,0.020779,0.01306,-0.010681,-0.024134,0.022709,0.119171,-0.003298,0.017828,-0.013127,-0.064879,-0.009267,0.056709,0.061207,0.033436,0.032858,0.081684,0.017481,0.042527,0.017722,-0.030177,-0.02706,-0.011197,-0.087242,0.038322,0.010253,-0.00592,0.014155,-0.062817,-0.020759,0.014933,0.058419,-0.044412,-0.035683,0.048737,0.032917,-0.006979,-0.073729,0.025754,0.014887,-0.004807,0.023434,0.119958,0.03983,-0.144797,-0.008404,-0.018435,0.046819,-0.011899,0.007994,0.037495,0.017984,-0.083784,0.020758,-0.034383,0.026337,0.000954,0.022064,0.02878,0.026564,0.033896,-0.056123,-0.004327,0.058076,-0.04271,-0.054552,0.040701,-0.008147,-0.016508,-0.034493,-0.033972,-0.089512,0.103474,0.050261,-0.006982,-0.02807,-0.006165,0.023715,-0.01533,0.116876,-0.037665,0.016086,0.019796,0.011207,0.069737,-0.003051,-0.028788,-0.022638,-0.05356,-0.041871,0.010356,0.04933,-0.035445,-0.034704,0.014637,-0.001431,0.01857,0.02523,0.058218,-0.056673,-0.008419,0.057999,-0.292184,0.011119,-0.034557,0.019065,0.081856,0.026024,0.045272,-0.005725,0.040133,0.027143,0.060738,-0.001719,0.034038,-0.062749,-0.005981,-0.007702,0.045735,-0.005452,-0.035763,-0.038483,-0.040414,0.0231,-0.10379,0.014896,0.033481,0.08244,0.142008,-0.079953,-0.041189,-0.054574,0.021786,0.024901,0.015252,0.00194,0.008777,0.004841,-0.03153,-0.019464,0.011191,-0.002234,-0.06805,0.011728,0.024692,-0.014717,0.063152,-0.026754,-0.034964,0.053241,-0.033944,0.051912,-0.004324,-0.08467,0.047665,0.055792,0.032203,-0.049306,-0.015563,0.041398,-0.051837,0.027331,0.036044,-0.006087,0.043367,-0.04984,0.040355,0.032388,0.029647,-0.013294,-0.048436,-0.018325,-0.002376,0.101977,-0.007983,-0.089868,0.024907,0.019618,0.024591,0.00421,-0.014908,-0.025423,-0.024376,0.014248,0.024471,0.049223,0.021186,0.06841,0.058825,0.020226,0.007841,-0.050929,-0.003366,-0.042192,-0.025681,0.017193,-0.004838,0.018043,-0.233802,0.011762,-0.003028,0.01566,-0.025017,0.012963,0.029273,0.026295,-0.041742,0.004166,-0.017606,0.040414,-0.022628,-0.021888,0.06024,-0.02813,0.030399,-0.061362,0.013818,-0.011144,0.04444,-0.030445,0.089825,0.032187,-0.078088,0.000195,-0.008252,0.058661,0.038333,-0.019781,-0.041118,-0.06414,0.064756,0.024063,0.059643,-0.043323,-0.072813,0.055532,-0.022405,-0.014673,-0.061432,-0.085619,-0.007924,0.034198,0.007825,0.02504,-0.042745,-0.112953,-0.039934,-3.9e-05,-0.048273,-0.044608,0.060451,-0.025629,0.039296,-0.013769,-0.066957,-0.002482,0.024112,-0.054016,-0.03041,0.035016,-0.00125,0.031766,0.038794]'::vector)), created_at DESC, example_id
-        Sort Method: top-N heapsort  Memory: 25kB
-        ->  Seq Scan on reference_examples  (cost=10000000000.00..10000000042.00 rows=100 width=39) (actual time=0.063..0.301 rows=100 loops=1)
-              Filter: ((tenant_id = '00000000-0000-0000-0000-000000000001'::uuid) AND (agent_id = '00000000-0000-0000-0000-000000000002'::uuid) AND ((status)::text = 'active'::text))
-Planning Time: 0.039 ms
-JIT:
-  Functions: 5
-  Options: Inlining true, Optimization true, Expressions true, Deforming true
-  Timing: Generation 0.531 ms, Inlining 49.143 ms, Optimization 26.079 ms, Emission 23.089 ms, Total 98.842 ms
-Execution Time: 139.025 ms
-```
-
-### Analysis of Query Execution:
-1. **Index Scan Activation**: HNSW index traversal (`Index Scan using idx_reference_examples_hnsw_cosine`) directly evaluates the cosine distance operator (`<=>`), fetching the nearest vectors in $O(\log N)$ time.
-2. **Filtering Interaction**: In PostgreSQL with pgvector, filtering on `tenant_id` and `agent_id` runs during index traversal or post-filter. With $N=100$ items, both flat scans and index scans complete in $<1$ ms.
-3. **As table size scales** to $10^5-10^6$ rows, flat sequential scans grow linearly $O(N)$, while HNSW maintains sub-10ms latency $O(\log N)$.
+\* *Note: With `hnsw.iterative_scan = off`, candidate queue exhaustion across the shared 12,650-row graph results in 0 returned rows for sparse partitions. Solved by setting `hnsw.iterative_scan = strict_order`.*
 
 ---
 
-## 6. Recommended Operational Configuration
+## 3. HNSW Parameter Tuning Analysis ($N=10,000$)
 
-Based on measured Recall@K and latency percentiles:
-- **Index Build Parameters**: `m = 16`, `ef_construction = 64` (provides compact index size of 208 kB while guaranteeing 100% recall).
-- **Runtime Query Parameter**: `ef_search = 64` (achieves 100.0% Recall@10 with negligible latency difference vs `ef=16`).
-- **Vector Dimension**: `vector(384)` for `BAAI/bge-small-en-v1.5`.
+| Configuration | $m$ | $ef\_c$ | $ef\_s$ | Recall@1 | Recall@5 | Recall@10 | DB Latency (p50) | Index Size |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Config-A (m=16, ef_c=32) | 16 | 32 | 16 | 96.0% | 94.0% | 92.8% | 1.16 ms | 25 MB |
+| Config-A (m=16, ef_c=32) | 16 | 32 | 32 | 98.0% | 96.0% | 94.8% | 0.86 ms | 25 MB |
+| Config-A (m=16, ef_c=32) | 16 | 32 | 64 | 98.0% | 96.0% | 94.8% | 1.06 ms | 25 MB |
+| Config-A (m=16, ef_c=32) | 16 | 32 | 128 | 98.0% | 96.0% | 94.8% | 1.37 ms | 25 MB |
+| Config-B (m=16, ef_c=64) [Default] | 16 | 64 | 16 | 96.0% | 96.0% | 96.0% | 1.09 ms | 25 MB |
+| Config-B (m=16, ef_c=64) [Default] | 16 | 64 | 32 | 100.0% | 100.0% | 100.0% | 0.92 ms | 25 MB |
+| Config-B (m=16, ef_c=64) [Default] | 16 | 64 | 64 | 100.0% | 100.0% | 100.0% | 0.87 ms | 25 MB |
+| Config-B (m=16, ef_c=64) [Default] | 16 | 64 | 128 | 100.0% | 100.0% | 100.0% | 1.42 ms | 25 MB |
+| Config-C (m=24, ef_c=128) | 24 | 128 | 16 | 100.0% | 100.0% | 100.0% | 0.98 ms | 25 MB |
+| Config-C (m=24, ef_c=128) | 24 | 128 | 32 | 100.0% | 100.0% | 100.0% | 0.70 ms | 25 MB |
+| Config-C (m=24, ef_c=128) | 24 | 128 | 64 | 100.0% | 100.0% | 100.0% | 0.88 ms | 25 MB |
+| Config-C (m=24, ef_c=128) | 24 | 128 | 128 | 100.0% | 100.0% | 100.0% | 1.49 ms | 25 MB |
+| Config-D (m=32, ef_c=128) | 32 | 128 | 16 | 100.0% | 100.0% | 100.0% | 1.12 ms | 26 MB |
+| Config-D (m=32, ef_c=128) | 32 | 128 | 32 | 100.0% | 100.0% | 100.0% | 0.97 ms | 26 MB |
+| Config-D (m=32, ef_c=128) | 32 | 128 | 64 | 100.0% | 100.0% | 100.0% | 1.11 ms | 26 MB |
+| Config-D (m=32, ef_c=128) | 32 | 128 | 128 | 100.0% | 100.0% | 100.0% | 1.25 ms | 26 MB |
+
+---
+
+## 4. Latency Decomposition Breakdown
+
+- **Embedding Inference (CUDA)**: ~9.5 ms (73% of total retrieval time)
+- **Database Query Execution (pgvector)**: ~0.75 ms (5.8% of total retrieval time)
+- **Connection Pool Checkout**: ~0.05 ms (<0.5%)
+- **Result Mapping / Deserialization**: ~0.04 ms (<0.5%)
+- **Total End-to-End Latency**: **~12.98 ms (p50: 11.76 ms, p95: 23.38 ms)**
+
+---
+
+## 5. Architectural Recommendations for Production Gate Service
+
+1. **Operational Connection Settings**:
+   Configure the async connection pool in `DatabaseManager` to initialize sessions with:
+   ```sql
+   SET hnsw.iterative_scan = strict_order;
+   SET hnsw.ef_search = 64;
+   ```
+2. **Index Parameters**:
+   Adopt `m = 16, ef_construction = 64` as the production index configuration.
+3. **Multi-Tenant Scaling**:
+   Implement declarative table partitioning by `tenant_id` once any tenant reaches $>50,000$ examples to eliminate graph traversal filtering overhead.
+

@@ -195,9 +195,10 @@ class PgVectorReferenceExampleRepository(ReferenceExampleRepositoryPort):
         top_k: int,
         ef_search: int = 64,
     ) -> list[ReferenceNeighbor]:
-        """Execute approximate (HNSW) retrieval with ef_search session tuning."""
-        # Set session-local ef_search parameter for HNSW graph traversal
+        """Execute approximate (HNSW) retrieval with ef_search and iterative_scan tuning."""
+        # Set session-local ef_search and iterative_scan parameters for HNSW graph traversal
         await self.session.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
+        await self.session.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
 
         # In PostgreSQL with pgvector, querying ordering by embedding <=> query_vec
         # automatically triggers an HNSW index scan when available.
