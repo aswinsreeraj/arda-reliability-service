@@ -51,3 +51,6 @@ mypy_path = ["src", "."]
 check_untyped_defs = true
 ignore_missing_imports = true
 
+[tool.ruff]
+extend-exclude = ["src/arda_reliability_service/infrastructure/grpc/generated"]
+

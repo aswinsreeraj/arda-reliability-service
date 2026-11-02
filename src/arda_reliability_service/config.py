@@ -63,6 +63,28 @@ class Settings(BaseSettings):
         description="Default HNSW ef_search parameter for approximate queries",
     )
 
+    # gRPC Server Settings
+    grpc_host: str = Field(
+        default="0.0.0.0",
+        description="gRPC server bind host",
+    )
+    grpc_port: int = Field(
+        default=50051,
+        description="gRPC server bind port",
+    )
+    grpc_max_workers: int = Field(
+        default=10,
+        description="Maximum worker threads for gRPC server",
+    )
+    grpc_max_message_length_mb: int = Field(
+        default=16,
+        description="Maximum gRPC message size in megabytes",
+    )
+    grpc_grace_period_seconds: float = Field(
+        default=5.0,
+        description="Grace period in seconds for graceful shutdown",
+    )
+
     # Provisional Reliability Scoring & Gate Thresholds (Week 3 experimental defaults)
     # NOTE: These values are experimental defaults established for developmental gating.
     # They are provisional and NOT calibrated production thresholds.
