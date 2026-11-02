@@ -1,0 +1,245 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ARDAReferenceDataset",
+  "description": "Schema definition and validation rules for ARDA Reliability Service synthetic reference datasets.",
+  "type": "object",
+  "required": [
+    "dataset_name",
+    "dataset_version",
+    "description",
+    "decision_domain",
+    "tenant_id",
+    "agent_id",
+    "total_examples",
+    "label_distribution",
+    "case_type_distribution",
+    "examples"
+  ],
+  "properties": {
+    "dataset_name": {
+      "type": "string",
+      "minLength": 3
+    },
+    "dataset_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10
+    },
+    "decision_domain": {
+      "type": "string",
+      "minLength": 5
+    },
+    "tenant_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "total_examples": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "label_distribution": {
+      "type": "object",
+      "required": ["APPROVE", "REJECT"],
+      "properties": {
+        "APPROVE": { "type": "integer", "minimum": 0 },
+        "REJECT": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "case_type_distribution": {
+      "type": "object",
+      "required": [
+        "straightforward",
+        "borderline",
+        "incomplete_evidence",
+        "conflicting_signals",
+        "contrastive_pair"
+      ],
+      "properties": {
+        "straightforward": { "type": "integer", "minimum": 0 },
+        "borderline": { "type": "integer", "minimum": 0 },
+        "incomplete_evidence": { "type": "integer", "minimum": 0 },
+        "conflicting_signals": { "type": "integer", "minimum": 0 },
+        "contrastive_pair": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "examples": {
+      "type": "array",
+      "minItems": 100,
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/definitions/ReferenceExample"
+      }
+    }
+  },
+  "definitions": {
+    "ReferenceExample": {
+      "type": "object",
+      "required": [
+        "example_id",
+        "tenant_id",
+        "agent_id",
+        "case_description",
+        "label",
+        "source",
+        "status",
+        "metadata",
+        "rationale"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "example_id": {
+          "type": "string",
+          "pattern": "^ref-example-[0-9]{3}$"
+        },
+        "tenant_id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "agent_id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "case_description": {
+          "type": "string",
+          "minLength": 20,
+          "description": "Natural language description of case facts. Strictly isolated for embedding generation. MUST NOT contain labels, decisions, or rationales."
+        },
+        "label": {
+          "type": "string",
+          "enum": ["APPROVE", "REJECT"]
+        },
+        "source": {
+          "type": "string",
+          "enum": ["synthetic"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "archived", "deprecated"]
+        },
+        "metadata": {
+          "$ref": "#/definitions/ExampleMetadata"
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 15,
+          "description": "Auditable explanation of the reference adjudication policy. Used for inspection and evaluation only; never included in embeddings."
+        }
+      }
+    },
+    "ExampleMetadata": {
+      "type": "object",
+      "required": [
+        "category",
+        "case_type",
+        "transaction_id",
+        "transaction_amount",
+        "currency",
+        "merchant",
+        "merchant_category",
+        "customer_tenure_months",
+        "prior_dispute_count",
+        "dispute_filing_delay_days",
+        "evidence_signals",
+        "raw_value_description",
+        "ratio_verbalized_description",
+        "ratio_features"
+      ],
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": [
+            "unauthorized_transaction",
+            "goods_not_received",
+            "defective_or_not_as_described",
+            "duplicate_billing",
+            "subscription_cancellation",
+            "credit_not_processed"
+          ]
+        },
+        "case_type": {
+          "type": "string",
+          "enum": [
+            "straightforward",
+            "borderline",
+            "incomplete_evidence",
+            "conflicting_signals",
+            "contrastive_pair"
+          ]
+        },
+        "contrastive_pair_id": {
+          "type": ["string", "null"]
+        },
+        "transaction_id": {
+          "type": "string",
+          "pattern": "^tx_syn_[0-9]{4}$"
+        },
+        "transaction_amount": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["USD"]
+        },
+        "merchant": {
+          "type": "string",
+          "minLength": 2
+        },
+        "merchant_category": {
+          "type": "string",
+          "minLength": 2
+        },
+        "customer_tenure_months": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "prior_dispute_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dispute_filing_delay_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence_signals": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "raw_value_description": {
+          "type": "string",
+          "minLength": 20
+        },
+        "ratio_verbalized_description": {
+          "type": "string",
+          "minLength": 20
+        },
+        "ratio_features": {
+          "type": "object",
+          "required": [
+            "dispute_to_lifetime_tx_ratio",
+            "dispute_filing_to_statutory_window_ratio",
+            "amount_to_median_transaction_ratio",
+            "tenure_years"
+          ],
+          "properties": {
+            "dispute_to_lifetime_tx_ratio": { "type": "number", "minimum": 0 },
+            "dispute_filing_to_statutory_window_ratio": { "type": "number", "minimum": 0 },
+            "amount_to_median_transaction_ratio": { "type": "number", "minimum": 0 },
+            "tenure_years": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}
+
