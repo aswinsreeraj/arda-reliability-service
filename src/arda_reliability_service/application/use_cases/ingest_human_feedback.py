@@ -108,11 +108,7 @@ class IngestHumanFeedbackUseCase:
                     timestamp = resolved_at
 
                 key_id = str(event_input.get("key_id", "v1"))
-                signature = str(
-                    event_input.get("signature")
-                    or event_input.get("producer_token")
-                    or ""
-                )
+                signature = str(event_input.get("signature") or "")
 
                 return HumanResolutionEvent(
                     event_id=str(event_input["event_id"]),
@@ -140,7 +136,6 @@ class IngestHumanFeedbackUseCase:
                     ),
                     key_id=key_id,
                     signature=signature,
-                    producer_token=signature,
                     timestamp=timestamp,
                 )
             except KeyError as ke:

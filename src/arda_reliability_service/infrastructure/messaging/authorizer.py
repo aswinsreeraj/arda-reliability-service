@@ -75,7 +75,7 @@ def build_canonical_payload(
     13. timestamp: canonical RFC3339 UTC string (YYYY-MM-DDTHH:MM:SSZ)
 
     Excluded Fields:
-    - signature / producer_signature / producer_token (cannot sign itself)
+    - signature / producer_signature (cannot sign itself)
     - correlation_id (tracing metadata that can be altered by proxies/sidecars)
     - transport-level metadata (Kafka topic, partition, offset, broker timestamps)
     """
@@ -101,7 +101,7 @@ def build_canonical_payload(
             )
         timestamp = format_canonical_timestamp(ts_val)
     elif isinstance(event, HumanResolutionEvent):
-        agent_id = str(event.tenant_id if False else event.agent_id).lower()
+        agent_id = str(event.agent_id).lower()
         case_id = event.case_id.strip()
         event_id = event.event_id.strip()
         event_type = event.event_type.strip()
@@ -135,9 +135,12 @@ def build_canonical_payload(
         "tenant_id": tenant_id,
         "timestamp": timestamp,
     }
-    return json.dumps(canonical_dict, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    return json.dumps(
+        canonical_dict,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
 
 
 def compute_hmac_signature(secret: str, canonical_payload: bytes) -> str:
@@ -159,7 +162,6 @@ def sign_event(
     canonical_bytes = build_canonical_payload(ev)
     signature = compute_hmac_signature(secret, canonical_bytes)
     ev["signature"] = signature
-    ev["producer_token"] = signature  # maintain backwards compatibility
     return ev
 
 
@@ -179,21 +181,25 @@ class TrustedProducerAuthorizer(EventAuthorizerPort):
         enforce_producer_auth: bool | None = None,
         settings: Settings | None = None,
     ) -> None:
-        if settings is not None:
-            if trusted_producers is None:
-                trusted_producers = set(settings.redpanda_trusted_producers)
-            if producer_secret is None:
-                producer_secret = settings.redpanda_producer_secret
-            if producer_secrets is None:
-                producer_secrets = settings.redpanda_producer_secrets
-            if max_event_age_seconds is None:
-                max_event_age_seconds = settings.redpanda_max_event_age_seconds
-            if clock_skew_tolerance_seconds is None:
-                clock_skew_tolerance_seconds = (
-                    settings.redpanda_clock_skew_tolerance_seconds
-                )
-            if enforce_producer_auth is None:
-                enforce_producer_auth = settings.redpanda_enforce_producer_auth
+        if settings is None:
+            from arda_reliability_service.config import get_settings
+
+            settings = get_settings()
+
+        if trusted_producers is None:
+            trusted_producers = set(settings.redpanda_trusted_producers)
+        if producer_secret is None:
+            producer_secret = settings.redpanda_producer_secret
+        if producer_secrets is None:
+            producer_secrets = settings.redpanda_producer_secrets
+        if max_event_age_seconds is None:
+            max_event_age_seconds = settings.redpanda_max_event_age_seconds
+        if clock_skew_tolerance_seconds is None:
+            clock_skew_tolerance_seconds = (
+                settings.redpanda_clock_skew_tolerance_seconds
+            )
+        if enforce_producer_auth is None:
+            enforce_producer_auth = settings.redpanda_enforce_producer_auth
 
         self.trusted_producers: AbstractSet[str] = (
             set(trusted_producers)
@@ -217,16 +223,15 @@ class TrustedProducerAuthorizer(EventAuthorizerPort):
         )
 
         # Build secrets map: producer_id -> {key_id: secret}
+        # In multi-key rotation environments, only explicitly configured producer keys are active.
+        # Fallback to shared producer_secret only applies when producer_secrets map is empty.
         self.producer_secrets: dict[str, dict[str, str]] = {}
-        if producer_secrets is not None:
+        if producer_secrets:
             for p, keys in producer_secrets.items():
-                self.producer_secrets[p] = dict(keys)
-
-        # Fallback to single producer_secret for any trusted producer missing keys
-        fallback_sec = producer_secret or "arda-producer-secret-default"
-        for p in self.trusted_producers:
-            if p not in self.producer_secrets or not self.producer_secrets[p]:
-                self.producer_secrets[p] = {"v1": fallback_sec}
+                self.producer_secrets[p] = {k: v for k, v in keys.items() if v}
+        elif producer_secret:
+            for p in self.trusted_producers:
+                self.producer_secrets[p] = {"v1": producer_secret}
 
     def authorize_event(
         self,
@@ -237,10 +242,10 @@ class TrustedProducerAuthorizer(EventAuthorizerPort):
 
         Boundary Note:
         - Producer authentication guarantees that the event originated from a trusted internal service.
-        - Reviewer authorization screens for forged identities, ensuring that only authenticated
-          human reviewers adjudicated by the producer boundary are accepted.
-        - The Reliability Service delegates reviewer tenant-membership RBAC to the upstream
-          producer boundary, which must authenticate human reviewers before signing.
+        - Reviewer identity screening is a defensive sanitization filter against automated/bot
+          identities; it is NOT an RBAC mechanism.
+        - Reviewer authentication, tenant authorization, and RBAC are the strict responsibility
+          of the upstream review service boundary, which must authenticate human reviewers before signing.
         """
         if self.enforce_producer_auth:
             # 1. Producer Identity Verification
@@ -251,7 +256,17 @@ class TrustedProducerAuthorizer(EventAuthorizerPort):
 
             # 2. Key ID & Secret Lookup
             prod_keys = self.producer_secrets.get(event.producer_id, {})
-            key_id = event.key_id or "v1"
+            if not prod_keys:
+                raise UnauthorizedProducerError(
+                    f"No active signing keys configured for producer '{event.producer_id}'."
+                )
+
+            key_id = (event.key_id or "").strip()
+            if not key_id:
+                raise UnauthorizedProducerError(
+                    f"Missing key_id for event '{event.event_id}' from producer '{event.producer_id}'."
+                )
+
             secret = prod_keys.get(key_id)
             if not secret:
                 raise UnauthorizedProducerError(
@@ -259,7 +274,7 @@ class TrustedProducerAuthorizer(EventAuthorizerPort):
                 )
 
             # 3. Signature Presence
-            supplied_sig = (event.signature or event.producer_token).strip()
+            supplied_sig = (event.signature or "").strip()
             if not supplied_sig:
                 raise UnauthorizedProducerError(
                     f"Missing HMAC signature for event '{event.event_id}' from producer '{event.producer_id}'."

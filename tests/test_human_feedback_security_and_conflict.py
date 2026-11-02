@@ -232,13 +232,11 @@ def make_test_event_dict(
     }
     if signature is not None:
         raw["signature"] = signature
-        raw["producer_token"] = signature
         return raw
     elif secret is not None:
         return sign_event(raw, secret=secret, key_id=key_id)
     else:
         raw["signature"] = ""
-        raw["producer_token"] = ""
         return raw
 
 

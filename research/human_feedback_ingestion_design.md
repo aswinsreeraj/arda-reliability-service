@@ -60,20 +60,21 @@ To guarantee identical byte-level serialization between heterogeneous environmen
    - `timestamp`: string (canonical RFC3339 UTC string with second precision: `YYYY-MM-DDTHH:MM:SSZ`)
 
 2. **Excluded Fields**:
-   - `signature` / `producer_token` (cannot sign the signature itself)
+   - `signature` / `producer_signature` (cannot sign the signature itself; obsolete `producer_token` has been removed)
    - `correlation_id` (distributed tracing metadata that may be mutated by service proxies/sidecars)
    - Transport metadata (Kafka partition, offset, topic, arrival timestamps)
 
 3. **Serialization Format**:
-   - Compact UTF-8 encoded JSON with no whitespace: `json.dumps(dict, sort_keys=True, separators=(',', ':')).encode('utf-8')`.
+   - Compact UTF-8 encoded JSON with no whitespace and raw UTF-8 representation (no ASCII escaping): `json.dumps(dict, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')`.
 
-### 3.3 Go Producer Signing Example
-When the Go Agent Runtime human review worker publishes an authoritative resolution, it must generate the signature as follows:
+### 3.3 Go Producer Signing Specification
+When an upstream Go human review worker publishes an authoritative resolution, it must generate the canonical payload and signature using Go's `encoding/json` with HTML escaping disabled (`SetEscapeHTML(false)`) and UTF-8 second-precision RFC3339 timestamps:
 
 ```go
 package producer
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -97,9 +98,19 @@ type CanonicalPayload struct {
 	Timestamp               string `json:"timestamp"`
 }
 
+func BuildCanonicalPayload(payload CanonicalPayload) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false) // guarantees <, >, & are not replaced by \u003c, \u003e, \u0026
+	if err := enc.Encode(payload); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
 func SignEvent(payload CanonicalPayload, secretKey string) (string, error) {
-	// 1. Serialize deterministic JSON (compact, sorted keys)
-	payloadBytes, err := json.Marshal(payload)
+	// 1. Serialize deterministic JSON (compact, sorted keys, raw UTF-8)
+	payloadBytes, err := BuildCanonicalPayload(payload)
 	if err != nil {
 		return "", err
 	}
@@ -174,8 +185,8 @@ Replay protection is enforced via a two-tier mechanism:
 ### Delegation Contract:
 - The Reliability Service **delegates reviewer tenant-membership RBAC to the upstream producer boundary**.
 - **Reason**: No centralized reviewer-directory network RPC currently exists to query user-to-tenant memberships asynchronously from Python.
-- **Reviewer Screening**: The Python service screens `reviewer_id` against bot and forged patterns (`anonymous`, `unauthorized`, `bot`, `system`, `automated`, `unknown`, `none`). This screening provides defensive sanity checking but is **not** equivalent to external directory RBAC.
-- **Integration Dependency**: Upstream Go event publishers must guarantee human identity authentication and tenant isolation prior to signing and emitting events.
+- **Reviewer Screening**: The Python service screens `reviewer_id` against bot and forged patterns (`anonymous`, `unauthorized`, `bot`, `system`, `automated`, `unknown`, `none`). This screening provides defensive sanity checking but is **not** an RBAC implementation.
+- **Pending Go Producer Dependency**: An upstream Go producer service (`arda.human-review-service`) does not yet exist in the Go repository (`/home/aswin/second-project/arda`). While serialization and HMAC verification interoperability have been proven via real Go runtime tests, end-to-end integration is explicitly marked as pending.
 
 ---
 

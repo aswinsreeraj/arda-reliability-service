@@ -73,10 +73,6 @@ class HumanResolutionEventDTO(BaseModel):
         default=None,
         description="Event signing timestamp for freshness and replay defense",
     )
-    producer_token: str = Field(
-        default="",
-        description="Legacy alias for signature",
-    )
 
     @field_validator("event_id")
     @classmethod
@@ -139,7 +135,7 @@ class HumanResolutionEventDTO(BaseModel):
 
     def to_domain(self) -> HumanResolutionEvent:
         """Convert validated DTO into core domain entity."""
-        sig = (self.signature or self.producer_token).strip()
+        sig = self.signature.strip()
         ts = self.timestamp or self.resolved_at
         return HumanResolutionEvent(
             event_id=self.event_id,
@@ -157,6 +153,5 @@ class HumanResolutionEventDTO(BaseModel):
             producer_id=self.producer_id,
             key_id=self.key_id,
             signature=sig,
-            producer_token=sig,
             timestamp=ts,
         )

@@ -101,7 +101,6 @@ class HumanResolutionEvent:
     producer_id: str = "arda.human-review-service"
     key_id: str = "v1"
     signature: str = ""
-    producer_token: str = ""
     timestamp: datetime | None = None
 
     def get_event_timestamp(self) -> datetime:
@@ -110,10 +109,6 @@ class HumanResolutionEvent:
 
     def __post_init__(self) -> None:
         """Validate domain invariants for human resolution event."""
-        if not self.signature and self.producer_token:
-            self.signature = self.producer_token
-        elif not self.producer_token and self.signature:
-            self.producer_token = self.signature
         if self.timestamp is None:
             self.timestamp = self.resolved_at
 
