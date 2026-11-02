@@ -216,6 +216,18 @@ class ReliabilityGateHandler(reliability_pb2_grpc.ReliabilityServiceServicer):
                 outcome=proto_outcome,
                 reason_code=result.reason_code,
                 neighbors=proto_neighbors,
+                raw_score=result.raw_score,
+                calibrated_confidence=(
+                    result.calibrated_confidence
+                    if result.is_calibrated and result.calibrated_confidence is not None
+                    else None
+                ),
+                is_calibrated=result.is_calibrated,
+                calibration_version=(
+                    result.calibration_version
+                    if result.is_calibrated and result.calibration_version is not None
+                    else None
+                ),
             )
 
         except DomainValidationError as exc:

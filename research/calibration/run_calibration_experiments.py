@@ -141,13 +141,13 @@ def run_confidence_calibration_experiments() -> None:
     }
 
     # 5. Display Summary Tables
-    print("\n" + "=" * 75)
+    print("\n" + "=" * 96)
     print("PARTITIONED 5-FOLD CROSS-VALIDATION RESULTS (OVERALL N=200 QUERIES)")
-    print("=" * 75)
+    print("=" * 96)
     print(
-        f"{'Model / Approach':<25} | {'ROC-AUC':<8} | {'Brier':<8} | {'LogLoss':<8} | {'ECE':<8} | {'Precision':<9} | {'F1':<6}"
+        f"{'Model / Approach':<25} | {'ROC-AUC':<8} | {'Brier':<8} | {'LogLoss':<8} | {'ECE':<8} | {'F1-Pos (τ=0.5)':<14} | {'F1-Macro (τ=0.5)':<16}"
     )
-    print("-" * 75)
+    print("-" * 96)
 
     raw_m = benchmark_results["raw_score_metrics"]
     platt_m = benchmark_results["platt_oof_metrics"]
@@ -155,16 +155,23 @@ def run_confidence_calibration_experiments() -> None:
     rand_m = benchmark_results["random_baseline_metrics"]
 
     print(
-        f"{'Raw Score (Baseline)':<25} | {raw_m['roc_auc']:<8.4f} | {raw_m['brier_score']:<8.4f} | {raw_m['log_loss']:<8.4f} | {raw_m['expected_calibration_error']:<8.4f} | {raw_m['precision']:<9.4f} | {raw_m['f1']:<6.4f}"
+        f"{'Raw Score (Baseline)*':<25} | {raw_m['roc_auc']:<8.4f} | {raw_m['brier_score']:<8.4f} | {raw_m['log_loss']:<8.4f} | {raw_m['expected_calibration_error']:<8.4f} | {'N/A (artif.)':<14} | {'0.3333 (artif.)':<16}"
     )
     print(
-        f"{'Platt Scaling (OOF)':<25} | {platt_m['roc_auc']:<8.4f} | {platt_m['brier_score']:<8.4f} | {platt_m['log_loss']:<8.4f} | {platt_m['expected_calibration_error']:<8.4f} | {platt_m['precision']:<9.4f} | {platt_m['f1']:<6.4f}"
+        f"{'Platt Scaling (OOF)':<25} | {platt_m['roc_auc']:<8.4f} | {platt_m['brier_score']:<8.4f} | {platt_m['log_loss']:<8.4f} | {platt_m['expected_calibration_error']:<8.4f} | {platt_m['f1_positive']:<14.4f} | {platt_m['f1_macro']:<16.4f}"
     )
     print(
-        f"{'Isotonic Reg (OOF)':<25} | {iso_m['roc_auc']:<8.4f} | {iso_m['brier_score']:<8.4f} | {iso_m['log_loss']:<8.4f} | {iso_m['expected_calibration_error']:<8.4f} | {iso_m['precision']:<9.4f} | {iso_m['f1']:<6.4f}"
+        f"{'Isotonic Reg (OOF)':<25} | {iso_m['roc_auc']:<8.4f} | {iso_m['brier_score']:<8.4f} | {iso_m['log_loss']:<8.4f} | {iso_m['expected_calibration_error']:<8.4f} | {iso_m['f1_positive']:<14.4f} | {iso_m['f1_macro']:<16.4f}"
     )
     print(
-        f"{'Random Guess (p=0.50)':<25} | {rand_m['roc_auc'] or 0.50:<8.4f} | {rand_m['brier_score']:<8.4f} | {rand_m['log_loss']:<8.4f} | {rand_m['expected_calibration_error']:<8.4f} | {rand_m['precision']:<9.4f} | {rand_m['f1']:<6.4f}"
+        f"{'Random Guess (p=0.50)*':<25} | {rand_m['roc_auc'] or 0.50:<8.4f} | {rand_m['brier_score']:<8.4f} | {rand_m['log_loss']:<8.4f} | {rand_m['expected_calibration_error']:<8.4f} | {rand_m['f1_positive']:<14.4f} | {rand_m['f1_macro']:<16.4f}"
+    )
+    print("-" * 96)
+    print(
+        "* Note on Raw Score: Threshold τ=0.50 on uncalibrated score (max 0.4881) produces 0 positive predictions."
+    )
+    print(
+        "* Note on Random Guess: Constant p=0.50 at τ=0.50 predicts 100% positive, giving F1_positive=0.6667 and F1_macro=0.3333."
     )
 
     print("\n" + "=" * 75)

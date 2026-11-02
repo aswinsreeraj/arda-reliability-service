@@ -103,12 +103,30 @@ To guarantee zero data leakage between training and evaluation folds, we impleme
 
 All test predictions were computed strictly out-of-fold across the 5 partitioned folds:
 
-| Model / Approach | ROC-AUC | Brier Score | Log Loss | ECE (10 Bins) | MCE | Precision | Recall | Macro F1 |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Raw Score (Baseline)** | **0.5352** | 0.3858 | 1.1341 | 0.3721 | 0.4430 | 0.0000 | 0.0000 | 0.0000 |
-| **Platt Scaling (OOF 5-Fold)** | **0.5285** | **0.2499** | **0.6929** | **0.0504** | **0.0535** | 0.5632 | 0.4900 | 0.5241 |
-| **Isotonic Regression (OOF 5-Fold)** | **0.5254** | 0.2507 | 0.6937 | 0.0339 | 0.1667 | 0.5263 | 0.5000 | 0.5128 |
-| **Random Guessing Baseline ($p=0.50$)** | 0.5000 | 0.2500 | 0.6931 | 0.0000 | 0.0000 | 0.5000 | 1.0000 | 0.6667 |
+| Model / Approach | ROC-AUC | Brier Score | Log Loss | ECE (10 Bins) | MCE | Precision ($\tau=0.5$) | Recall ($\tau=0.5$) | F1 Positive ($\tau=0.5$) | Macro F1 ($\tau=0.5$) |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Raw Score (Baseline)\*** | **0.5352** | 0.3858 | 1.1341 | 0.3721 | 0.4430 | *N/A (artifact)* | *N/A (artifact)* | *0.0000 (artifact)* | *0.3333 (artifact)* |
+| **Platt Scaling (OOF 5-Fold)** | **0.5285** | **0.2499** | **0.6929** | **0.0504** | **0.0535** | 0.5632 | 0.4900 | 0.5241 | 0.5531 |
+| **Isotonic Regression (OOF 5-Fold)** | **0.5254** | 0.2507 | 0.6937 | 0.0339 | 0.1667 | 0.5263 | 0.5000 | 0.5128 | 0.5247 |
+| **Random Guessing Baseline ($p=0.50$)\*** | 0.5000 | 0.2500 | 0.6931 | 0.0000 | 0.0000 | 0.5000 | 1.0000 | **0.6667** | **0.3333** |
+
+#### Methodological Clarifications on Classification Metrics:
+1. **Classification Threshold ($\tau = 0.50$)**:
+   The binary classification metrics (Precision, Recall, F1 Positive, and Macro F1) are evaluated at threshold $\tau = 0.50$. For calibrated probability estimates ($p \in [0.0, 1.0]$), $\tau = 0.50$ represents the natural Bayesian decision boundary under symmetric 0-1 loss.
+2. **Raw Score Threshold Artifact**:
+   The raw reliability score is the multiplicative product of three heuristic factors: $\text{raw\_score} = \text{Agreement} \times \text{Density Factor} \times \text{Coverage Factor}$.
+   On this 100-example reference dataset, raw scores range strictly within $[0.0, 0.4881]$ with an empirical mean of $\approx 0.13$. Applying a probability threshold of $\tau = 0.50$ to raw scores results in zero positive predictions. The resulting Precision = 0.0000, Recall = 0.0000, and F1 Positive = 0.0000 are purely artifacts of evaluating an uncalibrated score with an inappropriate probability threshold.
+   The true quality of the raw reliability score is measured by threshold-free proper scoring rules: **ROC-AUC = 0.5352** and **Brier Score = 0.3858**.
+3. **Random Baseline F1 Dissection (0.6667 vs. 0.3333)**:
+   The constant random baseline predicts $p = 0.50$ for all instances. At classification threshold $\tau = 0.50$, the decision rule $p \ge 0.50$ classifies all 200 instances as positive ($y=1$).
+   Because the dataset is strictly balanced (100 positive and 100 negative cases):
+   - $\text{True Positives (TP)} = 100, \text{False Positives (FP)} = 100, \text{False Negatives (FN)} = 0, \text{True Negatives (TN)} = 0$.
+   - $\text{Precision} = \frac{100}{100 + 100} = 0.5000$.
+   - $\text{Recall} = \frac{100}{100 + 0} = 1.0000$.
+   - **Positive-Class F1** is $2 \times \frac{0.5 \times 1.0}{0.5 + 1.0} = \mathbf{0.6667}$.
+   - For the negative class ($y=0$): $\text{TP}_0 = 0, \text{FP}_0 = 0, \text{FN}_0 = 100$, yielding an $F_1$ of $0.0000$.
+   - **Macro F1** (unweighted mean of both classes) is $\frac{0.6667 + 0.0000}{2} = \mathbf{0.3333}$.
+   Previous documentation ambiguous reported $0.6667$ without clarifying that it represented positive-class F1 for an all-positive classifier. The table above explicitly distinguishes Positive-Class F1 ($0.6667$) from Macro F1 ($0.3333$).
 
 ### 4.2 Comparison with Superseded Evaluation Protocols
 
@@ -234,51 +252,73 @@ flowchart TD
 
 ## 8. API and gRPC Contract Semantics
 
-### 8.1 Existing Contract Inspection (`proto/arda/v1/reliability.proto`)
-In the existing protobuf contract:
-```protobuf
-message GateResponse {
-  // Calibrated confidence, in [0.0, 1.0].
-  double confidence = 1;
+### 8.1 Historical Context and Contract Ambiguity
+Prior to this audit, a semantic ambiguity existed across the service boundary:
+- The comment on Field 1 in `proto/arda/v1/reliability.proto` described it as `Calibrated confidence, in [0.0, 1.0]`.
+- In practice, the Python service implementation (`EvaluateReliabilityUseCase`) has always generated an uncalibrated heuristic reliability score ($A \times D \times C$), because production calibration was never fitted or validated on live banking operational data.
+- Downstream Go runtime consumers (`pkg/agentruntime/llm_executor.go`, `gen/go/arda/v1/interop_test.go`, `services/gateway/http/gateway.go`) interpreted Field 1 as the primary gate score to compare against `reliability_threshold` and log in execution metadata.
+- An experimental attempt to dynamically swap Field 1 between calibrated confidence and raw score created non-deterministic semantics.
 
-  GateOutcome outcome = 2;
-  string reason_code = 3;
-  repeated ReferenceNeighbor neighbors = 4;
+### 8.2 Finalized Contract Schema (`proto/arda/v1/reliability.proto`)
+The contract has been finalized to eliminate ambiguity while preserving 100% backward compatibility for all existing consumers:
+
+```protobuf
+message GateRequest {
+  string tenant_id = 1;
+  string agent_id = 2;
+  string case_description = 3;
+  string proposed_decision = 4;
+
+  // Minimum acceptable evaluation threshold, in [0.0, 1.0],
+  // compared against the gate's evaluation score.
+  double reliability_threshold = 5;
 }
-```
 
-### 8.2 Strict Semantics for Existing Field 1
-To preserve contract stability for existing Go Agent Runtime clients:
-- **Field 1 `confidence` strictly outputs `result.raw_score`**.
-- It is **never silently overwritten** by experimental calibrated confidence.
-- Go clients rely on Field 1 to reflect the service's reliability evaluation. Changing Field 1's semantics would break runtime expectations.
-
-### 8.3 Proposed Backward-Compatible Contract Extension
-When production calibration is justified in the future, the contract can be extended in a 100% backward-compatible manner without altering fields 1–4:
-
-```protobuf
 message GateResponse {
-  // Field 1: Stable reliability score assessment (raw_score)
+  // Primary gate confidence score, in [0.0, 1.0].
+  // Maintained for backward compatibility with existing Go runtime clients.
+  // In current operational mode (where production calibration is deferred),
+  // this strictly contains the uncalibrated raw reliability score heuristic
+  // (Agreement * Density * Coverage). Consumers requiring calibrated posterior
+  // probabilities must inspect calibrated_confidence (field 6) when is_calibrated (field 7) is true.
   double confidence = 1;
 
+  // PASS only when the threshold is met and sufficient
+  // supporting evidence exists. Otherwise, require review.
   GateOutcome outcome = 2;
+
+  // Machine-readable explanation for the gate outcome.
   string reason_code = 3;
+
+  // Relevant reference examples supporting the evaluation.
   repeated ReferenceNeighbor neighbors = 4;
 
-  // Backward-Compatible Extensions (Proposed for Future Calibration Deployment):
-  // Field 5: Unambiguous raw reliability score (agreement * density * coverage)
+  // Backward-compatible extensions for explicit confidence semantics:
+
+  // Unambiguous raw reliability score, in [0.0, 1.0], computed as:
+  // raw_score = agreement * density_factor * coverage_factor.
+  // Always populated by the scoring engine.
   optional double raw_score = 5;
 
-  // Field 6: Calibrated confidence estimate in [0.0, 1.0]. Present only when fitted calibrator is active.
+  // Calibrated confidence estimate P(decision is correct | raw_score) in [0.0, 1.0].
+  // Populated ONLY when an active, fitted calibration model is enabled (is_calibrated = true).
+  // Absent (null/unset) when calibration is disabled, deferred, or unavailable.
   optional double calibrated_confidence = 6;
 
-  // Field 7: Flag indicating whether calibration was applied
+  // Indicates whether confidence calibration was performed by an active, fitted model.
+  // If false, calibrated_confidence is absent and confidence represents the raw score.
   bool is_calibrated = 7;
 
-  // Field 8: Version identifier of the active calibration model
+  // Lineage / model version identifier of the active calibrator (e.g., "platt-v1.0.0-seed100").
+  // Absent when is_calibrated is false.
   optional string calibration_version = 8;
 }
 ```
+
+### 8.3 Compatibility and Consumer Verification
+1. **Field 1 Semantics are Frozen**: Field 1 `confidence` is guaranteed to return `result.raw_score` during uncalibrated operation and will never dynamically swap between definitions.
+2. **Presence-Aware Optional Fields**: Fields 5, 6, and 8 use proto3 `optional` syntax, ensuring that an uncalibrated response omits `calibrated_confidence` entirely rather than transmitting a confusing default of `0.0`.
+3. **Go Client Verification**: Go client bindings were recompiled via `scripts/generate-proto.sh`. Go structs (`ReliabilityEvaluation`, `gateResponseBody`) and live integration tests (`gen/go/arda/v1/interop_test.go`) were updated and verified passing against the active Python service with 100% success.
 
 ---
 

@@ -167,6 +167,35 @@ class TestCalibrationMetrics:
             0.5, abs=1e-2
         )
 
+    def test_f1_positive_vs_macro_random_baseline(self) -> None:
+        """Verify positive-class F1 is 0.6667 and macro F1 is 0.3333 for all-positive predictions on balanced data."""
+        y_true = [1] * 50 + [0] * 50
+        y_pred = [0.5] * 100
+
+        metrics = calculate_metrics(y_true, y_pred, decision_threshold=0.50)
+        assert metrics.precision == 0.50
+        assert metrics.recall == 1.00
+        # Positive-class F1 = 2 * (0.5 * 1.0) / (0.5 + 1.0) = 2/3 = 0.6667
+        assert metrics.f1_positive == pytest.approx(2.0 / 3.0, abs=1e-3)
+        assert metrics.f1 == pytest.approx(2.0 / 3.0, abs=1e-3)
+        # Macro F1 = (2/3 + 0) / 2 = 1/3 = 0.3333
+        assert metrics.f1_macro == pytest.approx(1.0 / 3.0, abs=1e-3)
+        assert metrics.classification_threshold == 0.50
+
+    def test_raw_score_threshold_artifact_explicitly_qualified(self) -> None:
+        """Verify evaluating sub-0.5 raw scores with threshold 0.5 produces artifactual zero positive predictions."""
+        y_true = [1] * 50 + [0] * 50
+        # Sub-0.5 raw scores (typical of decomposed reliability heuristic A * D * C)
+        raw_scores = [0.15] * 50 + [0.12] * 50
+
+        metrics = calculate_metrics(y_true, raw_scores, decision_threshold=0.50)
+        # Zero positive predictions made because all raw_scores < 0.50
+        assert metrics.precision == 0.0
+        assert metrics.recall == 0.0
+        assert metrics.f1_positive == 0.0
+        # For class 0: TP=50, FP=50, FN=0 -> F1_neg = 2/3. Macro F1 = (0 + 2/3) / 2 = 1/3
+        assert metrics.f1_macro == pytest.approx(1.0 / 3.0, abs=1e-3)
+
     def test_false_pass_and_false_escalation_calculations(self) -> None:
         """Verify False Pass Rate and False Escalation Rate are mathematically sound."""
         y_true = [1, 1, 0, 0]

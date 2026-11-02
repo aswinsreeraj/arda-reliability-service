@@ -183,6 +183,121 @@ class TestReliabilityGateHandlerUnit:
         # Field 1 'confidence' must strictly reflect raw_score (0.68), preserving contract stability
         assert resp.confidence == 0.68
         assert resp.confidence != 0.94
+        assert resp.raw_score == 0.68
+        assert resp.is_calibrated is True
+        assert resp.HasField("calibrated_confidence")
+        assert resp.calibrated_confidence == 0.94
+        assert resp.HasField("calibration_version")
+        assert resp.calibration_version == "platt-v1.0.0-seed100"
+
+    @pytest.mark.asyncio
+    async def test_uncalibrated_response_behavior_omits_optional_calibration_fields(
+        self, handler: ReliabilityGateHandler, mock_use_case: AsyncMock
+    ) -> None:
+        """Verify uncalibrated gate response omits calibrated_confidence and calibration_version while setting raw_score."""
+        tenant_id = uuid4()
+        agent_id = uuid4()
+
+        mock_use_case.execute.return_value = ReliabilityEvaluationResult(
+            decision=GateDecision.ESCALATE,
+            proposed_decision="APPROVE",
+            raw_score=0.35,
+            calibrated_confidence=None,
+            is_calibrated=False,
+            calibration_version=None,
+            agreement=0.5,
+            density_factor=0.7,
+            coverage_factor=1.0,
+            evidence_count=2,
+            matching_evidence_count=1,
+            conflicting_evidence_count=1,
+            evaluation_reason="Below threshold",
+            reason_code=EvaluationReasonCode.SCORE_BELOW_THRESHOLD.value,
+            threshold_used=0.65,
+            retrieved_evidence=[],
+        )
+
+        req = reliability_pb2.GateRequest(
+            tenant_id=str(tenant_id),
+            agent_id=str(agent_id),
+            case_description="Uncalibrated cold claim.",
+            proposed_decision="APPROVE",
+        )
+        ctx = FakeServicerContext()
+
+        resp = await handler.Gate(req, ctx)  # type: ignore[arg-type]
+
+        assert not ctx.aborted
+        assert resp.confidence == 0.35
+        assert resp.raw_score == 0.35
+        assert resp.is_calibrated is False
+        assert not resp.HasField("calibrated_confidence")
+        assert not resp.HasField("calibration_version")
+
+    @pytest.mark.asyncio
+    async def test_stable_confidence_semantics_never_switch_dynamically(
+        self, handler: ReliabilityGateHandler, mock_use_case: AsyncMock
+    ) -> None:
+        """Prove that Field 1 confidence produces the exact same value regardless of whether calibration is active or inactive."""
+        tenant_id = uuid4()
+        agent_id = uuid4()
+        req = reliability_pb2.GateRequest(
+            tenant_id=str(tenant_id),
+            agent_id=str(agent_id),
+            case_description="Deterministic test case.",
+            proposed_decision="APPROVE",
+        )
+
+        # 1. Uncalibrated execution
+        mock_use_case.execute.return_value = ReliabilityEvaluationResult(
+            decision=GateDecision.PASS,
+            proposed_decision="APPROVE",
+            raw_score=0.72,
+            calibrated_confidence=None,
+            is_calibrated=False,
+            calibration_version=None,
+            agreement=1.0,
+            density_factor=0.8,
+            coverage_factor=0.9,
+            evidence_count=3,
+            matching_evidence_count=3,
+            conflicting_evidence_count=0,
+            evaluation_reason="Threshold met",
+            reason_code=EvaluationReasonCode.RELIABILITY_THRESHOLD_MET.value,
+            threshold_used=0.65,
+            retrieved_evidence=[],
+        )
+        resp_uncal = await handler.Gate(req, FakeServicerContext())  # type: ignore[arg-type]
+
+        # 2. Calibrated execution (calibrator outputs 0.98)
+        mock_use_case.execute.return_value = ReliabilityEvaluationResult(
+            decision=GateDecision.PASS,
+            proposed_decision="APPROVE",
+            raw_score=0.72,
+            calibrated_confidence=0.98,
+            is_calibrated=True,
+            calibration_version="platt-v1.0.0-seed100",
+            agreement=1.0,
+            density_factor=0.8,
+            coverage_factor=0.9,
+            evidence_count=3,
+            matching_evidence_count=3,
+            conflicting_evidence_count=0,
+            evaluation_reason="Threshold met",
+            reason_code=EvaluationReasonCode.RELIABILITY_THRESHOLD_MET.value,
+            threshold_used=0.65,
+            retrieved_evidence=[],
+        )
+        resp_cal = await handler.Gate(req, FakeServicerContext())  # type: ignore[arg-type]
+
+        # Field 1 'confidence' must be IDENTICAL across both responses
+        assert resp_uncal.confidence == 0.72
+        assert resp_cal.confidence == 0.72
+        assert resp_uncal.confidence == resp_cal.confidence
+        # Only the explicit presence-aware fields distinguish calibration state
+        assert not resp_uncal.HasField("calibrated_confidence")
+        assert resp_cal.HasField("calibrated_confidence")
+        assert resp_cal.calibrated_confidence == 0.98
 
     @pytest.mark.asyncio
     async def test_escalate_response_maps_to_review_required(

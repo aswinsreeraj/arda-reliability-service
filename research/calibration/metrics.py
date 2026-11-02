@@ -40,7 +40,10 @@ class CalibrationEvaluationMetrics:
     roc_auc: float | None
     precision: float
     recall: float
-    f1: float
+    f1: float  # alias to f1_positive for backward compatibility
+    f1_positive: float  # Positive-class F1 (pos_label=1) at decision_threshold
+    f1_macro: float  # Unweighted macro-averaged F1 across both classes
+    classification_threshold: float  # The threshold used for binary metrics (e.g. 0.50)
     brier_score: float
     log_loss: float
     expected_calibration_error: float  # ECE
@@ -162,7 +165,18 @@ def calculate_metrics(
     binary_preds = (y_score_arr >= decision_threshold).astype(int)
     prec = float(round(precision_score(y_true_arr, binary_preds, zero_division=0.0), 4))
     rec = float(round(recall_score(y_true_arr, binary_preds, zero_division=0.0), 4))
-    f1 = float(round(f1_score(y_true_arr, binary_preds, zero_division=0.0), 4))
+    f1_pos = float(
+        round(
+            f1_score(y_true_arr, binary_preds, pos_label=1, zero_division=0.0),
+            4,
+        )
+    )
+    f1_mac = float(
+        round(
+            f1_score(y_true_arr, binary_preds, average="macro", zero_division=0.0),
+            4,
+        )
+    )
 
     # Scoring rules
     brier = float(round(brier_score_loss(y_true_arr, y_score_arr), 4))
@@ -216,7 +230,10 @@ def calculate_metrics(
         roc_auc=roc_auc,
         precision=prec,
         recall=rec,
-        f1=f1,
+        f1=f1_pos,
+        f1_positive=f1_pos,
+        f1_macro=f1_mac,
+        classification_threshold=decision_threshold,
         brier_score=brier,
         log_loss=ll,
         expected_calibration_error=ece,

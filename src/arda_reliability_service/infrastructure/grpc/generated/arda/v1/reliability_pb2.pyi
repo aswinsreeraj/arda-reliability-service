@@ -31,16 +31,24 @@ class GateRequest(_message.Message):
     def __init__(self, tenant_id: _Optional[str] = ..., agent_id: _Optional[str] = ..., case_description: _Optional[str] = ..., proposed_decision: _Optional[str] = ..., reliability_threshold: _Optional[float] = ...) -> None: ...
 
 class GateResponse(_message.Message):
-    __slots__ = ("confidence", "outcome", "reason_code", "neighbors")
+    __slots__ = ("confidence", "outcome", "reason_code", "neighbors", "raw_score", "calibrated_confidence", "is_calibrated", "calibration_version")
     CONFIDENCE_FIELD_NUMBER: _ClassVar[int]
     OUTCOME_FIELD_NUMBER: _ClassVar[int]
     REASON_CODE_FIELD_NUMBER: _ClassVar[int]
     NEIGHBORS_FIELD_NUMBER: _ClassVar[int]
+    RAW_SCORE_FIELD_NUMBER: _ClassVar[int]
+    CALIBRATED_CONFIDENCE_FIELD_NUMBER: _ClassVar[int]
+    IS_CALIBRATED_FIELD_NUMBER: _ClassVar[int]
+    CALIBRATION_VERSION_FIELD_NUMBER: _ClassVar[int]
     confidence: float
     outcome: GateOutcome
     reason_code: str
     neighbors: _containers.RepeatedCompositeFieldContainer[ReferenceNeighbor]
-    def __init__(self, confidence: _Optional[float] = ..., outcome: _Optional[_Union[GateOutcome, str]] = ..., reason_code: _Optional[str] = ..., neighbors: _Optional[_Iterable[_Union[ReferenceNeighbor, _Mapping]]] = ...) -> None: ...
+    raw_score: float
+    calibrated_confidence: float
+    is_calibrated: bool
+    calibration_version: str
+    def __init__(self, confidence: _Optional[float] = ..., outcome: _Optional[_Union[GateOutcome, str]] = ..., reason_code: _Optional[str] = ..., neighbors: _Optional[_Iterable[_Union[ReferenceNeighbor, _Mapping]]] = ..., raw_score: _Optional[float] = ..., calibrated_confidence: _Optional[float] = ..., is_calibrated: _Optional[bool] = ..., calibration_version: _Optional[str] = ...) -> None: ...
 
 class ReferenceNeighbor(_message.Message):
     __slots__ = ("reference_example_id", "label", "similarity")

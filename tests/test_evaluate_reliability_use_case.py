@@ -19,6 +19,10 @@ from arda_reliability_service.application.use_cases.ingest_reference_examples im
 from arda_reliability_service.application.use_cases.retrieve_reference_examples import (
     RetrieveReferenceExamplesUseCase,
 )
+from arda_reliability_service.domain.calibration import (
+    PlattCalibrator,
+    UnavailableCalibrator,
+)
 from arda_reliability_service.domain.exceptions import (
     InvalidDescriptionError,
     InvalidProposedDecisionError,
@@ -147,6 +151,104 @@ class TestEvaluateReliabilityUseCaseUnit:
         assert result.conflicting_evidence_count == 0
         assert result.raw_score >= 0.65
         assert len(result.retrieved_evidence) == 3
+
+    @pytest.mark.asyncio
+    async def test_calibration_independence_from_gate_decision(
+        self, mock_retrieval: AsyncMock
+    ) -> None:
+        """Verify changing, failing, or disabling calibration never changes the gate outcome or reason code."""
+        tenant_id = uuid4()
+        agent_id = uuid4()
+        case_text = "Standard clear dispute precedent query"
+        mock_neighbors = [
+            ReferenceNeighbor(
+                example_id="ref-1",
+                label="APPROVE",
+                source="synthetic",
+                case_description="Precedent 1",
+                similarity_score=0.92,
+            ),
+            ReferenceNeighbor(
+                example_id="ref-2",
+                label="APPROVE",
+                source="synthetic",
+                case_description="Precedent 2",
+                similarity_score=0.90,
+            ),
+            ReferenceNeighbor(
+                example_id="ref-3",
+                label="APPROVE",
+                source="synthetic",
+                case_description="Precedent 3",
+                similarity_score=0.88,
+            ),
+        ]
+        mock_retrieval.execute.return_value = RetrievalResultSet(
+            neighbors=mock_neighbors,
+            query_description=case_text,
+            top_k=5,
+            retrieval_mode="approximate_hnsw",
+            execution_latency_ms=1.5,
+        )
+        request = ReliabilityEvaluationRequest(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            case_description=case_text,
+            proposed_decision="APPROVE",
+        )
+        cfg = ScoringConfig(min_reliability_threshold=0.65)
+
+        # 1. Uncalibrated
+        uc_none = EvaluateReliabilityUseCase(
+            retrieval_use_case=mock_retrieval, config=cfg, calibrator=None
+        )
+        res_none = await uc_none.execute(request)
+
+        # 2. Extreme low calibrator (maps to 0.001)
+        uc_low = EvaluateReliabilityUseCase(
+            retrieval_use_case=mock_retrieval,
+            config=cfg,
+            calibrator=PlattCalibrator(a=-20.0, b=-10.0, version="low"),
+        )
+        res_low = await uc_low.execute(request)
+
+        # 3. Extreme high calibrator (maps to 0.999)
+        uc_high = EvaluateReliabilityUseCase(
+            retrieval_use_case=mock_retrieval,
+            config=cfg,
+            calibrator=PlattCalibrator(a=20.0, b=10.0, version="high"),
+        )
+        res_high = await uc_high.execute(request)
+
+        # 4. Unavailable calibrator
+        uc_unavail = EvaluateReliabilityUseCase(
+            retrieval_use_case=mock_retrieval,
+            config=cfg,
+            calibrator=UnavailableCalibrator(),
+        )
+        res_unavail = await uc_unavail.execute(request)
+
+        # Decision, reason code, and raw score must be 100% IDENTICAL across all four
+        for res in [res_low, res_high, res_unavail]:
+            assert res.decision == res_none.decision
+            assert res.reason_code == res_none.reason_code
+            assert res.raw_score == res_none.raw_score
+
+        # Calibration fields correctly reflect calibrator state
+        assert res_none.is_calibrated is False
+        assert res_none.calibrated_confidence is None
+        assert res_low.is_calibrated is True
+        assert (
+            res_low.calibrated_confidence is not None
+            and res_low.calibrated_confidence < 0.05
+        )
+        assert res_high.is_calibrated is True
+        assert (
+            res_high.calibrated_confidence is not None
+            and res_high.calibrated_confidence > 0.95
+        )
+        assert res_unavail.is_calibrated is False
+        assert res_unavail.calibrated_confidence is None
 
     @pytest.mark.asyncio
     async def test_invalid_proposed_decision_raises(
