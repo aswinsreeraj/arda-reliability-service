@@ -21,4 +21,3 @@ class EventAuthorizerPort(ABC):
             UnauthorizedProducerError: If the producer is untrusted or unauthenticated.
             UnauthorizedReviewerError: If the reviewer identity is forged or unauthorized.
         """
-

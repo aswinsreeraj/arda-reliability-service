@@ -18,6 +18,9 @@ from arda_reliability_service.infrastructure.database.pg_feedback_repository imp
 from arda_reliability_service.infrastructure.embedding.sentence_transformer_adapter import (
     SentenceTransformerEmbeddingAdapter,
 )
+from arda_reliability_service.infrastructure.messaging.authorizer import (
+    sign_event,
+)
 from arda_reliability_service.infrastructure.messaging.consumer import (
     RedpandaFeedbackConsumer,
 )
@@ -88,7 +91,12 @@ async def test_live_redpanda_e2e_ingestion() -> None:
         "reviewer_id": "auditor_bob_99",
         "resolved_at": datetime.now(UTC).isoformat(),
         "correlation_id": f"corr-{uuid4().hex[:8]}",
+        "producer_id": "arda.human-review-service",
+        "key_id": "v1",
     }
+    event_payload = sign_event(
+        event_payload, secret=settings.redpanda_producer_secret, key_id="v1"
+    )
 
     try:
         # Publish event to Redpanda

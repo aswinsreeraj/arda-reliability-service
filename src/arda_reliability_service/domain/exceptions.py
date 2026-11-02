@@ -71,6 +71,18 @@ class UnauthorizedProducerError(ReliabilityDomainError):
     """Raised when an event originates from an untrusted or unauthenticated producer."""
 
 
+class InvalidSignatureError(UnauthorizedProducerError):
+    """Raised when an event's HMAC-SHA256 signature is invalid or fails verification."""
+
+
+class ExpiredEventError(UnauthorizedProducerError):
+    """Raised when an event's timestamp is older than the allowed maximum age."""
+
+
+class InvalidEventTimestampError(UnauthorizedProducerError):
+    """Raised when an event's timestamp is invalid or exceeds clock skew tolerance."""
+
+
 class UnauthorizedReviewerError(ReliabilityDomainError):
     """Raised when a human resolution event cannot establish authorized reviewer credentials."""
 

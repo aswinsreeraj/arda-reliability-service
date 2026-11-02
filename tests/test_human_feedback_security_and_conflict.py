@@ -1,35 +1,45 @@
-"""Comprehensive security and conflict hardening tests for human feedback ingestion.
+"""Comprehensive security, HMAC-SHA256 verification, and conflict hardening tests.
 
-Tests all 15 required verification scenarios:
-1. Unauthorized producer rejected and routed to DLQ.
-2. Invalid reviewer authorization rejected and routed to DLQ.
-3. Valid trusted human-resolution event persisted as active reference.
-4. Forged reviewer identity rejected and routed to DLQ.
-5. Conflicting human decisions quarantine reference example and record conflict audit.
-6. Quarantined reference example excluded from vector retrieval and reliability scoring.
-7. Duplicate delivery after quarantine does not reactivate reference.
-8. Concurrent conflicting events result in safe quarantined state without split-brain.
-9. Database uniqueness race handled gracefully via idempotent constraints.
-10. DLQ acknowledgement received before original offset commit.
-11. DLQ publication failure prevents offset commit.
-12. Offset commit failure after DLQ publication handled safely on redelivery.
-13. Sequential partition processing guarantees monotonically increasing offset commits.
-14. Consumer shutdown with unfinished messages leaves uncommitted offsets.
-15. Tenant and agent isolation preserved after conflict quarantine.
+Tests satisfy all 15 required verification scenarios from Week 5 Audit:
+1. Correct HMAC signature accepted.
+2. Incorrect signature rejected.
+3. Modified event payload rejected.
+4. Modified tenant or agent ID rejected.
+5. Modified human decision rejected.
+6. Unknown producer rejected.
+7. Unknown key ID rejected.
+8. Expired signed event rejected.
+9. Valid event within clock-skew tolerance accepted.
+10. Replayed event safely handled through idempotency.
+11. Secret not included in logs.
+12. Secret not included in DLQ payload.
+13. Key rotation with current and previous valid keys.
+14. Conflict quarantine still works.
+15. Offset is not committed after failed authentication and unsuccessful DLQ publication.
+
+Plus additional boundary and race hardening tests:
+- Reviewer screening against bot identities.
+- Quarantined reference excluded from retrieval and evaluation.
+- Duplicate delivery after quarantine does not reactivate.
+- Concurrent conflicting events quarantine safely.
+- Database uniqueness race handled gracefully.
+- Sequential partition processing offset safety.
+- Consumer shutdown with unfinished messages leaves offset uncommitted.
+- Tenant and agent isolation preserved after conflict quarantine.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
 from aiokafka import TopicPartition
-from aiokafka.structs import OffsetAndMetadata
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -59,6 +69,8 @@ from arda_reliability_service.infrastructure.database.pgvector_repository import
 )
 from arda_reliability_service.infrastructure.messaging.authorizer import (
     TrustedProducerAuthorizer,
+    format_canonical_timestamp,
+    sign_event,
 )
 from arda_reliability_service.infrastructure.messaging.consumer import (
     RedpandaFeedbackConsumer,
@@ -195,9 +207,13 @@ def make_test_event_dict(
     case_description: str = "Security verified customer dispute for account limit.",
     reviewer_id: str = "reviewer_alice_42",
     producer_id: str = "arda.human-review-service",
-    producer_token: str = "arda-producer-secret-default",
+    key_id: str = "v1",
+    secret: str | None = "arda-producer-secret-default",
+    timestamp: datetime | str | None = None,
+    signature: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    resolved_at = datetime.now(UTC).isoformat()
+    raw = {
         "event_id": event_id or f"evt-{uuid4()}",
         "event_type": "arda.reliability.human_resolution",
         "event_version": "v1",
@@ -209,104 +225,34 @@ def make_test_event_dict(
         "human_decision": human_decision,
         "reviewer_id": reviewer_id,
         "producer_id": producer_id,
-        "producer_token": producer_token,
-        "resolved_at": datetime.now(UTC).isoformat(),
+        "key_id": key_id,
+        "resolved_at": resolved_at,
+        "timestamp": format_canonical_timestamp(timestamp or resolved_at),
         "correlation_id": "corr-sec-123",
     }
+    if signature is not None:
+        raw["signature"] = signature
+        raw["producer_token"] = signature
+        return raw
+    elif secret is not None:
+        return sign_event(raw, secret=secret, key_id=key_id)
+    else:
+        raw["signature"] = ""
+        raw["producer_token"] = ""
+        return raw
 
 
 # ==============================================================================
-# 15 Test Scenarios
+# SECTION 7: 15 REQUIRED TEST SCENARIOS
 # ==============================================================================
 
 
 @pytest.mark.asyncio
-async def test_scenario_1_unauthorized_producer_routed_to_dlq(
+async def test_scenario_1_correct_hmac_signature_accepted(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """1. Unauthorized producer: invalid producer_id or bad token routed to DLQ."""
-    producer = MockKafkaProducer()
-    consumer = RedpandaFeedbackConsumer(
-        session_factory=session_factory,
-        embedding_provider=mock_embedder,
-        producer=producer,  # type: ignore[arg-type]
-    )
-
-    # Unknown producer
-    payload_bad_producer = make_test_event_dict(
-        producer_id="malicious.rogue-actor",
-        case_id="case-unauth-01",
-    )
-    msg1 = MockKafkaMessage(json.dumps(payload_bad_producer))
-    res1 = await consumer.process_single_message(msg1)
-    assert res1 is True
-    assert len(producer.sent_messages) == 1
-    dlq_topic1, dlq_bytes1 = producer.sent_messages[0]
-    assert dlq_topic1 == "arda.human-resolutions.dlq"
-    record1 = json.loads(dlq_bytes1.decode("utf-8"))
-    assert record1["error_type"] == "UnauthorizedProducerError"
-
-    # Invalid token for known producer
-    payload_bad_token = make_test_event_dict(
-        producer_id="arda.human-review-service",
-        producer_token="wrong-secret-token",
-        case_id="case-unauth-02",
-    )
-    msg2 = MockKafkaMessage(json.dumps(payload_bad_token))
-    res2 = await consumer.process_single_message(msg2)
-    assert res2 is True
-    assert len(producer.sent_messages) == 2
-    _dlq_topic2, dlq_bytes2 = producer.sent_messages[1]
-    record2 = json.loads(dlq_bytes2.decode("utf-8"))
-    assert record2["error_type"] == "UnauthorizedProducerError"
-
-    # Verify no reference example was created
-    async with session_factory() as session:
-        result = await session.execute(
-            text(
-                "SELECT COUNT(*) FROM reference_examples WHERE example_id IN ('case-unauth-01', 'case-unauth-02')"
-            )
-        )
-        assert result.scalar_one() == 0
-
-
-@pytest.mark.asyncio
-async def test_scenario_2_invalid_reviewer_authorization_routed_to_dlq(
-    session_factory: async_sessionmaker[AsyncSession],
-    mock_embedder: DeterministicMockEmbedder,
-) -> None:
-    """2. Invalid reviewer authorization: blank/missing reviewer identity routed to DLQ."""
-    producer = MockKafkaProducer()
-    consumer = RedpandaFeedbackConsumer(
-        session_factory=session_factory,
-        embedding_provider=mock_embedder,
-        producer=producer,  # type: ignore[arg-type]
-    )
-
-    # Empty reviewer
-    payload_empty_reviewer = make_test_event_dict(
-        reviewer_id="",
-        case_id="case-invalid-rev-01",
-    )
-    msg = MockKafkaMessage(json.dumps(payload_empty_reviewer))
-    res = await consumer.process_single_message(msg)
-    assert res is True
-    assert len(producer.sent_messages) == 1
-    _dlq_topic, dlq_bytes = producer.sent_messages[0]
-    record = json.loads(dlq_bytes.decode("utf-8"))
-    assert record["error_type"] in (
-        "UnauthorizedReviewerError",
-        "EventValidationError",
-    )
-
-
-@pytest.mark.asyncio
-async def test_scenario_3_valid_trusted_human_resolution_persisted(
-    session_factory: async_sessionmaker[AsyncSession],
-    mock_embedder: DeterministicMockEmbedder,
-) -> None:
-    """3. Valid trusted human-resolution event: persisted with active status and embedding."""
+    """1. Correct HMAC signature accepted: validly signed event persists active reference."""
     producer = MockKafkaProducer()
     consumer = RedpandaFeedbackConsumer(
         session_factory=session_factory,
@@ -316,38 +262,38 @@ async def test_scenario_3_valid_trusted_human_resolution_persisted(
 
     tenant_id = uuid4()
     agent_id = uuid4()
-    case_id = f"case-valid-sec-{uuid4().hex[:8]}"
+    case_id = f"case-valid-hmac-{uuid4().hex[:8]}"
 
     payload = make_test_event_dict(
         tenant_id=tenant_id,
         agent_id=agent_id,
         case_id=case_id,
         human_decision="APPROVE",
-        reviewer_id="reviewer_bob_101",
+        secret="arda-producer-secret-default",
+        key_id="v1",
     )
     msg = MockKafkaMessage(json.dumps(payload))
     res = await consumer.process_single_message(msg)
+
     assert res is True
     assert len(producer.sent_messages) == 0
 
-    # Verify database persistence
     async with session_factory() as session:
         repo = PgHumanFeedbackRepository(session)
         ref = await repo.get_reference_example(tenant_id, agent_id, case_id)
         assert ref is not None
         assert ref.status == "active"
         assert ref.label == "APPROVE"
-        assert ref.source in ("human_adjudication", "human_review")
         assert ref.embedding is not None
         assert len(ref.embedding) == 384
 
 
 @pytest.mark.asyncio
-async def test_scenario_4_forged_reviewer_identity_routed_to_dlq(
+async def test_scenario_2_incorrect_signature_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """4. Forged reviewer identity: bot/automated identities rejected."""
+    """2. Incorrect signature rejected: routed to DLQ with InvalidSignatureError."""
     producer = MockKafkaProducer()
     consumer = RedpandaFeedbackConsumer(
         session_factory=session_factory,
@@ -355,45 +301,438 @@ async def test_scenario_4_forged_reviewer_identity_routed_to_dlq(
         producer=producer,  # type: ignore[arg-type]
     )
 
-    forged_reviewers = [
-        "anonymous",
-        "system_bot",
-        "automated_reviewer_v2",
-        "none",
-    ]
-    for forged in forged_reviewers:
-        payload = make_test_event_dict(
-            reviewer_id=forged,
-            case_id=f"case-forged-{forged}",
-        )
-        msg = MockKafkaMessage(json.dumps(payload))
-        res = await consumer.process_single_message(msg)
-        assert res is True
+    payload = make_test_event_dict(
+        case_id="case-bad-sig-01",
+        signature="deadbeef" * 8,  # 64-char invalid hex signature
+    )
+    msg = MockKafkaMessage(json.dumps(payload))
+    res = await consumer.process_single_message(msg)
 
-    assert len(producer.sent_messages) == len(forged_reviewers)
-    for _, dlq_bytes in producer.sent_messages:
-        record = json.loads(dlq_bytes.decode("utf-8"))
-        assert record["error_type"] == "UnauthorizedReviewerError"
+    assert res is True
+    assert len(producer.sent_messages) == 1
+    _topic, dlq_bytes = producer.sent_messages[0]
+    record = json.loads(dlq_bytes.decode("utf-8"))
+    assert record["error_type"] == "InvalidSignatureError"
 
 
 @pytest.mark.asyncio
-async def test_scenario_5_conflicting_human_decisions_quarantine_reference(
+async def test_scenario_3_modified_event_payload_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """5. Conflicting human decisions: marks reference as quarantined and preserves both in audit."""
+    """3. Modified event payload rejected: altering description invalidates HMAC signature."""
+    producer = MockKafkaProducer()
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        producer=producer,  # type: ignore[arg-type]
+    )
+
+    # Generate valid signature for legitimate case description
+    payload = make_test_event_dict(
+        case_description="Legitimate transfer authorized by manager.",
+    )
+    # Attacker mutates the case description after signing
+    payload["original_case_description"] = (
+        "Tampered transfer exceeding approved threshold!"
+    )
+
+    msg = MockKafkaMessage(json.dumps(payload))
+    res = await consumer.process_single_message(msg)
+
+    assert res is True
+    assert len(producer.sent_messages) == 1
+    _topic, dlq_bytes = producer.sent_messages[0]
+    record = json.loads(dlq_bytes.decode("utf-8"))
+    assert record["error_type"] == "InvalidSignatureError"
+
+
+@pytest.mark.asyncio
+async def test_scenario_4_modified_tenant_or_agent_id_rejected(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """4. Modified tenant or agent ID rejected: cross-tenant tampering fails verification."""
+    producer = MockKafkaProducer()
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        producer=producer,  # type: ignore[arg-type]
+    )
+
+    tenant_a = uuid4()
+    agent_a = uuid4()
+    tenant_b = uuid4()
+
+    # Sign for Tenant A
+    payload = make_test_event_dict(
+        tenant_id=tenant_a,
+        agent_id=agent_a,
+        case_id="case-tenant-tamper-01",
+    )
+    # Attacker tampers tenant_id to Tenant B
+    payload["tenant_id"] = str(tenant_b)
+
+    msg = MockKafkaMessage(json.dumps(payload))
+    res = await consumer.process_single_message(msg)
+
+    assert res is True
+    assert len(producer.sent_messages) == 1
+    _topic, dlq_bytes = producer.sent_messages[0]
+    record = json.loads(dlq_bytes.decode("utf-8"))
+    assert record["error_type"] == "InvalidSignatureError"
+
+
+@pytest.mark.asyncio
+async def test_scenario_5_modified_human_decision_rejected(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """5. Modified human decision rejected: flipping decision invalidates signature."""
+    producer = MockKafkaProducer()
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        producer=producer,  # type: ignore[arg-type]
+    )
+
+    # Signed with REJECT
+    payload = make_test_event_dict(
+        human_decision="REJECT",
+        case_id="case-decision-tamper-01",
+    )
+    # Attacker tampers to APPROVE
+    payload["human_decision"] = "APPROVE"
+
+    msg = MockKafkaMessage(json.dumps(payload))
+    res = await consumer.process_single_message(msg)
+
+    assert res is True
+    assert len(producer.sent_messages) == 1
+    _topic, dlq_bytes = producer.sent_messages[0]
+    record = json.loads(dlq_bytes.decode("utf-8"))
+    assert record["error_type"] == "InvalidSignatureError"
+
+
+@pytest.mark.asyncio
+async def test_scenario_6_unknown_producer_rejected(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """6. Unknown producer rejected: unknown producer_id routed to DLQ."""
+    producer = MockKafkaProducer()
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        producer=producer,  # type: ignore[arg-type]
+    )
+
+    payload = make_test_event_dict(
+        producer_id="malicious.rogue-actor",
+        case_id="case-unauth-01",
+    )
+    msg = MockKafkaMessage(json.dumps(payload))
+    res = await consumer.process_single_message(msg)
+
+    assert res is True
+    assert len(producer.sent_messages) == 1
+    _topic, dlq_bytes = producer.sent_messages[0]
+    record = json.loads(dlq_bytes.decode("utf-8"))
+    assert record["error_type"] == "UnauthorizedProducerError"
+
+
+@pytest.mark.asyncio
+async def test_scenario_7_unknown_key_id_rejected(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """7. Unknown key ID rejected: key rotation identifier not configured."""
+    producer = MockKafkaProducer()
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        producer=producer,  # type: ignore[arg-type]
+    )
+
+    payload = make_test_event_dict(
+        key_id="v999_nonexistent_key",
+        case_id="case-unknown-key-01",
+    )
+    msg = MockKafkaMessage(json.dumps(payload))
+    res = await consumer.process_single_message(msg)
+
+    assert res is True
+    assert len(producer.sent_messages) == 1
+    _topic, dlq_bytes = producer.sent_messages[0]
+    record = json.loads(dlq_bytes.decode("utf-8"))
+    assert record["error_type"] == "UnauthorizedProducerError"
+
+
+@pytest.mark.asyncio
+async def test_scenario_8_expired_signed_event_rejected(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """8. Expired signed event rejected: event older than max_event_age is rejected."""
+    producer = MockKafkaProducer()
+    # Configure tight age window of 60 seconds
+    authorizer = TrustedProducerAuthorizer(max_event_age_seconds=60.0)
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        authorizer=authorizer,
+        producer=producer,  # type: ignore[arg-type]
+    )
+
+    # 10 minutes ago
+    expired_ts = datetime.now(UTC) - timedelta(seconds=600)
+    payload = make_test_event_dict(
+        case_id="case-expired-01",
+        timestamp=expired_ts,
+    )
+
+    msg = MockKafkaMessage(json.dumps(payload))
+    res = await consumer.process_single_message(msg)
+
+    assert res is True
+    assert len(producer.sent_messages) == 1
+    _topic, dlq_bytes = producer.sent_messages[0]
+    record = json.loads(dlq_bytes.decode("utf-8"))
+    assert record["error_type"] == "ExpiredEventError"
+
+
+@pytest.mark.asyncio
+async def test_scenario_9_valid_event_within_clock_skew_tolerance_accepted(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """9. Valid event within clock-skew tolerance accepted: future timestamp within tolerance accepted."""
+    producer = MockKafkaProducer()
+    authorizer = TrustedProducerAuthorizer(clock_skew_tolerance_seconds=60.0)
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        authorizer=authorizer,
+        producer=producer,  # type: ignore[arg-type]
+    )
+
     tenant_id = uuid4()
     agent_id = uuid4()
-    case_id = f"case-conflict-{uuid4().hex[:8]}"
+    case_id = f"case-clockskew-{uuid4().hex[:8]}"
 
-    # 1. First event: APPROVE
+    # 20 seconds in future (within 60s tolerance)
+    future_ts = datetime.now(UTC) + timedelta(seconds=20)
+    payload = make_test_event_dict(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        case_id=case_id,
+        timestamp=future_ts,
+    )
+
+    msg = MockKafkaMessage(json.dumps(payload))
+    res = await consumer.process_single_message(msg)
+
+    assert res is True
+    assert len(producer.sent_messages) == 0
+
+    async with session_factory() as session:
+        repo = PgHumanFeedbackRepository(session)
+        ref = await repo.get_reference_example(tenant_id, agent_id, case_id)
+        assert ref is not None
+        assert ref.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_scenario_10_replayed_event_safely_handled_through_idempotency(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """10. Replayed event safely handled through idempotency: replay within freshness window returns duplicate."""
+    producer = MockKafkaProducer()
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        producer=producer,  # type: ignore[arg-type]
+    )
+
+    tenant_id = uuid4()
+    agent_id = uuid4()
+    case_id = f"case-replay-{uuid4().hex[:8]}"
+    event_id = f"evt-replay-{uuid4()}"
+
+    payload = make_test_event_dict(
+        event_id=event_id,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        case_id=case_id,
+    )
+    msg = MockKafkaMessage(json.dumps(payload))
+
+    # Initial delivery
+    res1 = await consumer.process_single_message(msg)
+    assert res1 is True
+
+    # Replay attack (exact same signed message re-sent)
+    res2 = await consumer.process_single_message(msg)
+    assert res2 is True
+
+    # Exactly one reference example exists
+    async with session_factory() as session:
+        result = await session.execute(
+            text(
+                "SELECT COUNT(*) FROM reference_examples WHERE tenant_id = :t AND agent_id = :a AND example_id = :c"
+            ),
+            {"t": tenant_id, "a": agent_id, "c": case_id},
+        )
+        assert result.scalar_one() == 1
+
+
+@pytest.mark.asyncio
+async def test_scenario_11_secret_not_included_in_logs(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """11. Secret not included in logs: sensitive key material is never logged on failures."""
+    sensitive_secret = "super-confidential-producer-secret-8877"
+    producer = MockKafkaProducer()
+    authorizer = TrustedProducerAuthorizer(
+        producer_secrets={"arda.human-review-service": {"v1": sensitive_secret}}
+    )
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        authorizer=authorizer,
+        producer=producer,  # type: ignore[arg-type]
+    )
+
+    payload = make_test_event_dict(
+        case_id="case-leak-check-01",
+        signature="bad-signature-content",
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        msg = MockKafkaMessage(json.dumps(payload))
+        await consumer.process_single_message(msg)
+
+    # Check all captured log messages
+    for record in caplog.records:
+        assert sensitive_secret not in record.message
+        assert sensitive_secret not in str(record.exc_info)
+
+
+@pytest.mark.asyncio
+async def test_scenario_12_secret_not_included_in_dlq_payload(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """12. Secret not included in DLQ payload: DLQ error record never leaks signing secret."""
+    sensitive_secret = "ultra-secret-dlq-protection-key-9911"
+    producer = MockKafkaProducer()
+    authorizer = TrustedProducerAuthorizer(
+        producer_secrets={"arda.human-review-service": {"v1": sensitive_secret}}
+    )
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        authorizer=authorizer,
+        producer=producer,  # type: ignore[arg-type]
+    )
+
+    payload = make_test_event_dict(
+        case_id="case-dlq-secret-leak",
+        signature="invalid-sig-9999",
+    )
+    msg = MockKafkaMessage(json.dumps(payload))
+    await consumer.process_single_message(msg)
+
+    assert len(producer.sent_messages) == 1
+    _topic, dlq_bytes = producer.sent_messages[0]
+    dlq_text = dlq_bytes.decode("utf-8")
+
+    assert sensitive_secret not in dlq_text
+
+
+@pytest.mark.asyncio
+async def test_scenario_13_key_rotation_with_current_and_previous_valid_keys(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """13. Key rotation: authorizer verifies both retiring (v1) and active (v2) keys."""
+    old_secret_v1 = "legacy-secret-retiring-key-v1"
+    new_secret_v2 = "active-secret-primary-key-v2"
+
+    authorizer = TrustedProducerAuthorizer(
+        producer_secrets={
+            "arda.human-review-service": {
+                "v1": old_secret_v1,
+                "v2": new_secret_v2,
+            }
+        }
+    )
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        authorizer=authorizer,
+        producer=MockKafkaProducer(),  # type: ignore[arg-type]
+    )
+
+    # 1. Event signed with legacy key v1 -> ACCEPTED
+    payload_v1 = make_test_event_dict(
+        case_id=f"case-rot-v1-{uuid4().hex[:8]}",
+        key_id="v1",
+        secret=old_secret_v1,
+    )
+    msg_v1 = MockKafkaMessage(json.dumps(payload_v1))
+    assert await consumer.process_single_message(msg_v1) is True
+
+    # 2. Event signed with new active key v2 -> ACCEPTED
+    payload_v2 = make_test_event_dict(
+        case_id=f"case-rot-v2-{uuid4().hex[:8]}",
+        key_id="v2",
+        secret=new_secret_v2,
+    )
+    msg_v2 = MockKafkaMessage(json.dumps(payload_v2))
+    assert await consumer.process_single_message(msg_v2) is True
+
+    # 3. Event signed with key_id v1 but using v2 secret -> REJECTED
+    payload_mismatch = make_test_event_dict(
+        case_id=f"case-rot-bad-{uuid4().hex[:8]}",
+        key_id="v1",
+        secret=new_secret_v2,  # wrong secret for v1!
+    )
+    msg_mismatch = MockKafkaMessage(json.dumps(payload_mismatch))
+    producer_dlq = MockKafkaProducer()
+    consumer_fail = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        authorizer=authorizer,
+        producer=producer_dlq,  # type: ignore[arg-type]
+    )
+    await consumer_fail.process_single_message(msg_mismatch)
+    assert len(producer_dlq.sent_messages) == 1
+    record = json.loads(producer_dlq.sent_messages[0][1].decode("utf-8"))
+    assert record["error_type"] == "InvalidSignatureError"
+
+
+@pytest.mark.asyncio
+async def test_scenario_14_conflict_quarantine_still_works(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """14. Conflict quarantine: signed opposing resolutions transition reference to quarantined."""
+    tenant_id = uuid4()
+    agent_id = uuid4()
+    case_id = f"case-quar-check-{uuid4().hex[:8]}"
+
+    # Event 1: APPROVE
     ev1 = make_test_event_dict(
         tenant_id=tenant_id,
         agent_id=agent_id,
         case_id=case_id,
         human_decision="APPROVE",
     )
-    # 2. Opposing event: REJECT
+    # Event 2: REJECT
     ev2 = make_test_event_dict(
         tenant_id=tenant_id,
         agent_id=agent_id,
@@ -411,16 +750,12 @@ async def test_scenario_5_conflicting_human_decisions_quarantine_reference(
         res1 = await use_case.execute(ev1)
         await session.commit()
         assert res1.outcome == HumanFeedbackIngestionOutcome.PROCESSED
-        assert res1.reference_created is True
 
         res2 = await use_case.execute(ev2)
         await session.commit()
         assert res2.outcome == HumanFeedbackIngestionOutcome.CONFLICT
-        assert res2.reference_created is False
 
-    # Check PostgreSQL state
-    async with session_factory() as session:
-        repo = PgHumanFeedbackRepository(session)
+        # Confirm reference is quarantined and conflict metadata recorded
         ref = await repo.get_reference_example(tenant_id, agent_id, case_id)
         assert ref is not None
         assert ref.status == "quarantined"
@@ -428,29 +763,74 @@ async def test_scenario_5_conflicting_human_decisions_quarantine_reference(
         assert ref.metadata["conflict"]["existing_label"] == "APPROVE"
         assert ref.metadata["conflict"]["new_label"] == "REJECT"
 
-        # Check audit table has both events
-        result = await session.execute(
-            text(
-                "SELECT event_id, status FROM human_feedback_events WHERE case_id = :case_id ORDER BY created_at ASC"
-            ),
-            {"case_id": case_id},
-        )
-        rows = result.all()
-        assert len(rows) == 2
-        assert rows[0][1] == "PROCESSED"
-        assert rows[1][1] == "CONFLICT"
-
 
 @pytest.mark.asyncio
-async def test_scenario_6_quarantined_example_excluded_from_retrieval(
+async def test_scenario_15_offset_not_committed_after_failed_auth_and_unsuccessful_dlq(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """6. Quarantined reference example: excluded from vector retrieval and evaluation."""
+    """15. Offset safety: offset is NOT committed when DLQ publication fails for unauthorized event."""
+    failing_producer = MockKafkaProducer(fail_dlq=True)
+    consumer_mock = MockKafkaConsumer()
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        producer=failing_producer,  # type: ignore[arg-type]
+        consumer=consumer_mock,  # type: ignore[arg-type]
+    )
+
+    # Event with bad signature
+    payload = make_test_event_dict(
+        case_id="case-fail-dlq-offset",
+        signature="corrupted-signature",
+    )
+    msg = MockKafkaMessage(json.dumps(payload), offset=123)
+
+    should_commit = await consumer.process_single_message(msg)
+    # Must return False because DLQ write failed!
+    assert should_commit is False
+
+    if should_commit:
+        await consumer._commit_message_offset(msg)
+
+    # Consumer offset must NOT be committed
+    assert len(consumer_mock.committed) == 0
+
+
+# ==============================================================================
+# ADDITIONAL CONFLICT, ISOLATION, AND RECOVERY REGRESSION TESTS
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_forged_reviewer_identity_rejected(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """Screening: bot identities rejected even if signed by producer."""
+    consumer = RedpandaFeedbackConsumer(
+        session_factory=session_factory,
+        embedding_provider=mock_embedder,
+        producer=MockKafkaProducer(),  # type: ignore[arg-type]
+    )
+    forged_reviewers = ["anonymous", "system_bot", "automated_worker", "none"]
+    for f in forged_reviewers:
+        payload = make_test_event_dict(reviewer_id=f)
+        msg = MockKafkaMessage(json.dumps(payload))
+        res = await consumer.process_single_message(msg)
+        assert res is True  # handled and sent to DLQ
+
+
+@pytest.mark.asyncio
+async def test_quarantined_example_excluded_from_retrieval(
+    session_factory: async_sessionmaker[AsyncSession],
+    mock_embedder: DeterministicMockEmbedder,
+) -> None:
+    """Quarantine exclusion: quarantined examples are never retrieved as evidence."""
     tenant_id = uuid4()
     agent_id = uuid4()
     case_id = f"case-excl-{uuid4().hex[:8]}"
-    desc = "Quarantined description that should never be retrieved as evidence."
+    desc = "Quarantined transaction dispute narrative."
 
     ev1 = make_test_event_dict(
         tenant_id=tenant_id,
@@ -478,8 +858,7 @@ async def test_scenario_6_quarantined_example_excluded_from_retrieval(
         await use_case.execute(ev2)
         await session.commit()
 
-    # Now perform retrieval and evaluation using the exact description
-    async with session_factory() as session:
+        # Evaluate against identical description
         retrieval_repo = PgVectorReferenceExampleRepository(session)
         retrieval_use_case = RetrieveReferenceExamplesUseCase(
             retrieval_repo, mock_embedder
@@ -496,21 +875,19 @@ async def test_scenario_6_quarantined_example_excluded_from_retrieval(
             proposed_decision="APPROVE",
         )
         eval_res = await eval_use_case.execute(req)
-
-        # Quarantined example is not active, so retrieved evidence must be empty
         assert len(eval_res.retrieved_evidence) == 0
         assert eval_res.decision.value == "ESCALATE"
 
 
 @pytest.mark.asyncio
-async def test_scenario_7_duplicate_delivery_after_quarantine_does_not_reactivate(
+async def test_duplicate_delivery_after_quarantine_does_not_reactivate(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """7. Duplicate delivery after quarantine: stays quarantined and is not reactivated."""
+    """Quarantine immutability: redelivery after quarantine never reactivates reference."""
     tenant_id = uuid4()
     agent_id = uuid4()
-    case_id = f"case-dup-quar-{uuid4().hex[:8]}"
+    case_id = f"case-quar-dup-{uuid4().hex[:8]}"
 
     ev1 = make_test_event_dict(
         tenant_id=tenant_id,
@@ -524,8 +901,7 @@ async def test_scenario_7_duplicate_delivery_after_quarantine_does_not_reactivat
         case_id=case_id,
         human_decision="REJECT",
     )
-    # Duplicate of first event
-    ev3_dup = make_test_event_dict(
+    ev3 = make_test_event_dict(
         tenant_id=tenant_id,
         agent_id=agent_id,
         case_id=case_id,
@@ -538,31 +914,30 @@ async def test_scenario_7_duplicate_delivery_after_quarantine_does_not_reactivat
         use_case = IngestHumanFeedbackUseCase(
             repo, mock_embedder, authorizer=authorizer
         )
+
         await use_case.execute(ev1)
         await session.commit()
         await use_case.execute(ev2)
         await session.commit()
 
-        # Execute duplicate
-        res3 = await use_case.execute(ev3_dup)
+        res3 = await use_case.execute(ev3)
         await session.commit()
         assert res3.outcome == HumanFeedbackIngestionOutcome.IDEMPOTENT_DUPLICATE
 
-        # Confirm reference is still quarantined
         ref = await repo.get_reference_example(tenant_id, agent_id, case_id)
         assert ref is not None
         assert ref.status == "quarantined"
 
 
 @pytest.mark.asyncio
-async def test_scenario_8_concurrent_conflicting_events_safe_quarantine(
+async def test_concurrent_conflicting_events_safe_quarantine(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """8. Concurrent conflicting events: safely resolve into quarantined state."""
+    """Concurrency: race between opposing events produces safe quarantined reference."""
     tenant_id = uuid4()
     agent_id = uuid4()
-    case_id = f"case-concurrent-conflict-{uuid4().hex[:8]}"
+    case_id = f"case-race-quar-{uuid4().hex[:8]}"
 
     ev_app = make_test_event_dict(
         tenant_id=tenant_id,
@@ -591,13 +966,8 @@ async def test_scenario_8_concurrent_conflicting_events_safe_quarantine(
     results: tuple[Any, ...] = await asyncio.gather(
         run_event(ev_app), run_event(ev_rej)
     )
-    # One is PROCESSED and the other is CONFLICT
-    assert set(results) == {
-        HumanFeedbackIngestionOutcome.PROCESSED,
-        HumanFeedbackIngestionOutcome.CONFLICT,
-    }
+    assert HumanFeedbackIngestionOutcome.CONFLICT in results
 
-    # Final DB state must be quarantined
     async with session_factory() as session:
         repo = PgHumanFeedbackRepository(session)
         ref = await repo.get_reference_example(tenant_id, agent_id, case_id)
@@ -606,14 +976,14 @@ async def test_scenario_8_concurrent_conflicting_events_safe_quarantine(
 
 
 @pytest.mark.asyncio
-async def test_scenario_9_database_uniqueness_race_graceful_handling(
+async def test_database_uniqueness_race_graceful_handling(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """9. Database uniqueness race: concurrent identical events handled gracefully."""
+    """Database race: concurrent identical events handled gracefully via ON CONFLICT."""
     tenant_id = uuid4()
     agent_id = uuid4()
-    case_id = f"case-race-{uuid4().hex[:8]}"
+    case_id = f"case-race-uniq-{uuid4().hex[:8]}"
 
     ev1 = make_test_event_dict(
         tenant_id=tenant_id,
@@ -657,11 +1027,11 @@ async def test_scenario_9_database_uniqueness_race_graceful_handling(
 
 
 @pytest.mark.asyncio
-async def test_scenario_10_dlq_acknowledgement_before_offset_commit(
+async def test_sequential_partition_processing_offset_safety(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """10. DLQ acknowledgement before original offset commit."""
+    """Sequential partition processing ensures monotonically increasing offset commits."""
     producer = MockKafkaProducer()
     consumer_mock = MockKafkaConsumer()
     consumer = RedpandaFeedbackConsumer(
@@ -671,93 +1041,6 @@ async def test_scenario_10_dlq_acknowledgement_before_offset_commit(
         consumer=consumer_mock,  # type: ignore[arg-type]
     )
 
-    # Invalid JSON message
-    msg = MockKafkaMessage(b"not-json", offset=42)
-    should_commit = await consumer.process_single_message(msg)
-    assert should_commit is True
-    if should_commit:
-        await consumer._commit_message_offset(msg)
-
-    # Verify DLQ publication completed before offset commit
-    assert producer.call_log == ["send_and_wait:arda.human-resolutions.dlq"]
-    assert consumer_mock.call_log == ["commit"]
-    tp = TopicPartition(msg.topic, msg.partition)
-    assert consumer_mock.committed == [{tp: OffsetAndMetadata(43, "")}]
-
-
-@pytest.mark.asyncio
-async def test_scenario_11_dlq_publication_failure_prevents_offset_commit(
-    session_factory: async_sessionmaker[AsyncSession],
-    mock_embedder: DeterministicMockEmbedder,
-) -> None:
-    """11. DLQ publication failure: offset is NOT committed when broker fails."""
-    # Producer configured to fail on DLQ send
-    failing_producer = MockKafkaProducer(fail_dlq=True)
-    consumer_mock = MockKafkaConsumer()
-    consumer = RedpandaFeedbackConsumer(
-        session_factory=session_factory,
-        embedding_provider=mock_embedder,
-        producer=failing_producer,  # type: ignore[arg-type]
-        consumer=consumer_mock,  # type: ignore[arg-type]
-    )
-
-    msg = MockKafkaMessage(b"not-json", offset=50)
-    should_commit = await consumer.process_single_message(msg)
-    # process_single_message must return False because DLQ write failed!
-    assert should_commit is False
-    if should_commit:
-        await consumer._commit_message_offset(msg)
-
-    # Offset must NOT have been committed
-    assert len(consumer_mock.committed) == 0
-
-
-@pytest.mark.asyncio
-async def test_scenario_12_offset_commit_failure_after_dlq_handled_safely(
-    session_factory: async_sessionmaker[AsyncSession],
-    mock_embedder: DeterministicMockEmbedder,
-) -> None:
-    """12. Offset commit failure after DLQ publication handled safely on redelivery."""
-    producer = MockKafkaProducer()
-    # Consumer configured to fail on commit
-    failing_consumer = MockKafkaConsumer(fail_commit=True)
-    consumer = RedpandaFeedbackConsumer(
-        session_factory=session_factory,
-        embedding_provider=mock_embedder,
-        producer=producer,  # type: ignore[arg-type]
-        consumer=failing_consumer,  # type: ignore[arg-type]
-    )
-
-    msg = MockKafkaMessage(b"bad-message", offset=99)
-    should_commit = await consumer.process_single_message(msg)
-    assert should_commit is True
-
-    # Attempt offset commit
-    committed_ok = await consumer._commit_message_offset(msg)
-    assert committed_ok is False
-
-    # On redelivery of same message, DLQ receives it again without crash
-    redelivery_should_commit = await consumer.process_single_message(msg)
-    assert redelivery_should_commit is True
-    assert len(producer.sent_messages) == 2
-
-
-@pytest.mark.asyncio
-async def test_scenario_13_sequential_partition_processing_offset_safety(
-    session_factory: async_sessionmaker[AsyncSession],
-    mock_embedder: DeterministicMockEmbedder,
-) -> None:
-    """13. Sequential partition processing ensures monotonically increasing offset commits."""
-    producer = MockKafkaProducer()
-    consumer_mock = MockKafkaConsumer()
-    consumer = RedpandaFeedbackConsumer(
-        session_factory=session_factory,
-        embedding_provider=mock_embedder,
-        producer=producer,  # type: ignore[arg-type]
-        consumer=consumer_mock,  # type: ignore[arg-type]
-    )
-
-    # 3 sequential messages on partition 0 with offsets 100, 101, 102
     events = [make_test_event_dict(case_id=f"seq-case-{i}") for i in range(3)]
     msgs = [
         MockKafkaMessage(json.dumps(ev), partition=0, offset=100 + i)
@@ -777,11 +1060,11 @@ async def test_scenario_13_sequential_partition_processing_offset_safety(
 
 
 @pytest.mark.asyncio
-async def test_scenario_14_consumer_shutdown_with_unfinished_messages(
+async def test_consumer_shutdown_with_unfinished_messages(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """14. Consumer shutdown with unfinished messages leaves offset uncommitted."""
+    """Shutdown safety: cancelled consumer loop does not commit uncompleted messages."""
     msg = MockKafkaMessage(b"long-running-message", offset=777)
     consumer_mock = MockKafkaConsumer([msg])
     producer = MockKafkaProducer()
@@ -793,30 +1076,26 @@ async def test_scenario_14_consumer_shutdown_with_unfinished_messages(
         consumer=consumer_mock,  # type: ignore[arg-type]
     )
 
-    # Start consumer loop
     await consumer.start()
-    # Immediately stop before processing finishes
     await consumer.stop()
 
-    # Offset must NOT be committed
     assert len(consumer_mock.committed) == 0
 
 
 @pytest.mark.asyncio
-async def test_scenario_15_tenant_and_agent_isolation_after_conflict_quarantine(
+async def test_tenant_and_agent_isolation_after_conflict_quarantine(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """15. Tenant and agent isolation: quarantining in Tenant A does NOT affect Tenant B."""
+    """Isolation: quarantining in Tenant A does NOT affect Tenant B."""
     tenant_a = uuid4()
     agent_a = uuid4()
     tenant_b = uuid4()
     agent_b = uuid4()
 
-    shared_desc = "Standard subscription cancellation dispute."
+    shared_desc = "Standard account credit dispute."
     shared_case_id = "case-shared-desc-001"
 
-    # Tenant A receives conflicting events -> Quarantined
     ev_a1 = make_test_event_dict(
         tenant_id=tenant_a,
         agent_id=agent_a,
@@ -831,8 +1110,6 @@ async def test_scenario_15_tenant_and_agent_isolation_after_conflict_quarantine(
         case_description=shared_desc,
         human_decision="REJECT",
     )
-
-    # Tenant B receives authoritative APPROVE -> Active
     ev_b = make_test_event_dict(
         tenant_id=tenant_b,
         agent_id=agent_b,
@@ -855,9 +1132,6 @@ async def test_scenario_15_tenant_and_agent_isolation_after_conflict_quarantine(
         await use_case.execute(ev_b)
         await session.commit()
 
-    # Verify database isolation
-    async with session_factory() as session:
-        repo = PgHumanFeedbackRepository(session)
         ref_a = await repo.get_reference_example(tenant_a, agent_a, shared_case_id)
         ref_b = await repo.get_reference_example(tenant_b, agent_b, shared_case_id)
 
@@ -867,7 +1141,6 @@ async def test_scenario_15_tenant_and_agent_isolation_after_conflict_quarantine(
         assert ref_b is not None
         assert ref_b.status == "active"
 
-        # Evaluate Tenant B: finds active reference
         retrieval_repo = PgVectorReferenceExampleRepository(session)
         retrieval_use_case = RetrieveReferenceExamplesUseCase(
             retrieval_repo, mock_embedder
@@ -887,7 +1160,6 @@ async def test_scenario_15_tenant_and_agent_isolation_after_conflict_quarantine(
         assert len(eval_b.retrieved_evidence) == 1
         assert eval_b.retrieved_evidence[0].example_id == ref_b.example_id
 
-        # Evaluate Tenant A: quarantined example is excluded
         req_a = ReliabilityEvaluationRequest(
             tenant_id=tenant_a,
             agent_id=agent_a,

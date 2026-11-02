@@ -64,6 +64,9 @@ from arda_reliability_service.infrastructure.database.pgvector_repository import
 from arda_reliability_service.infrastructure.embedding.sentence_transformer_adapter import (
     SentenceTransformerEmbeddingAdapter,
 )
+from arda_reliability_service.infrastructure.messaging.authorizer import (
+    sign_event,
+)
 from arda_reliability_service.infrastructure.messaging.consumer import (
     RedpandaFeedbackConsumer,
 )
@@ -191,7 +194,7 @@ def make_valid_event_dict(
     human_decision: str = "APPROVE",
     case_description: str = "Authorized refund under approved limit of $50.",
 ) -> dict[str, Any]:
-    return {
+    raw_ev = {
         "event_id": event_id or f"evt-{uuid4()}",
         "event_type": "arda.reliability.human_resolution",
         "event_version": "v1",
@@ -204,7 +207,10 @@ def make_valid_event_dict(
         "reviewer_id": "reviewer_alice_42",
         "resolved_at": datetime.now(UTC).isoformat(),
         "correlation_id": "corr-test-123",
+        "producer_id": "arda.human-review-service",
+        "key_id": "v1",
     }
+    return sign_event(raw_ev, secret="arda-producer-secret-default", key_id="v1")
 
 
 # ==============================================================================

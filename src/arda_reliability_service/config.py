@@ -126,6 +126,28 @@ class Settings(BaseSettings):
         default="arda-producer-secret-default",
         description="Shared secret for authenticating trusted event producers",
     )
+    redpanda_producer_secrets: dict[str, dict[str, str]] = Field(
+        default_factory=lambda: {
+            "arda.human-review-service": {
+                "v1": "arda-producer-secret-default",
+            },
+            "arda.gateway.review-worker": {
+                "v1": "arda-producer-secret-default",
+            },
+            "arda.workflow-engine": {
+                "v1": "arda-producer-secret-default",
+            },
+        },
+        description="Per-producer key rotation map: producer_id -> {key_id: secret}",
+    )
+    redpanda_max_event_age_seconds: float = Field(
+        default=300.0,
+        description="Maximum allowed event age in seconds for freshness and replay defense",
+    )
+    redpanda_clock_skew_tolerance_seconds: float = Field(
+        default=60.0,
+        description="Permitted clock skew tolerance in seconds for future event timestamps",
+    )
     redpanda_enforce_producer_auth: bool = Field(
         default=True,
         description="Whether to strictly enforce producer authentication and reviewer screening",

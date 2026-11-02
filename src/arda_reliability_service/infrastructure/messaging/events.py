@@ -61,9 +61,21 @@ class HumanResolutionEventDTO(BaseModel):
         default="arda.human-review-service",
         description="Identifier of the publishing service",
     )
+    key_id: str = Field(
+        default="v1",
+        description="Key identifier used for HMAC signing key rotation",
+    )
+    signature: str = Field(
+        default="",
+        description="HMAC-SHA256 signature of canonical event payload",
+    )
+    timestamp: datetime | None = Field(
+        default=None,
+        description="Event signing timestamp for freshness and replay defense",
+    )
     producer_token: str = Field(
-        default="arda-producer-secret-default",
-        description="Authentication token proving authorized producer boundary",
+        default="",
+        description="Legacy alias for signature",
     )
 
     @field_validator("event_id")
@@ -127,6 +139,8 @@ class HumanResolutionEventDTO(BaseModel):
 
     def to_domain(self) -> HumanResolutionEvent:
         """Convert validated DTO into core domain entity."""
+        sig = (self.signature or self.producer_token).strip()
+        ts = self.timestamp or self.resolved_at
         return HumanResolutionEvent(
             event_id=self.event_id,
             event_type=self.event_type,
@@ -141,5 +155,8 @@ class HumanResolutionEventDTO(BaseModel):
             resolved_at=self.resolved_at,
             correlation_id=self.correlation_id,
             producer_id=self.producer_id,
-            producer_token=self.producer_token,
+            key_id=self.key_id,
+            signature=sig,
+            producer_token=sig,
+            timestamp=ts,
         )

@@ -2,6 +2,10 @@
 
 from arda_reliability_service.infrastructure.messaging.authorizer import (
     TrustedProducerAuthorizer,
+    build_canonical_payload,
+    compute_hmac_signature,
+    format_canonical_timestamp,
+    sign_event,
 )
 from arda_reliability_service.infrastructure.messaging.consumer import (
     RedpandaFeedbackConsumer,
@@ -22,4 +26,8 @@ __all__ = [
     "MetricsSnapshot",
     "RedpandaFeedbackConsumer",
     "TrustedProducerAuthorizer",
+    "build_canonical_payload",
+    "compute_hmac_signature",
+    "format_canonical_timestamp",
+    "sign_event",
 ]

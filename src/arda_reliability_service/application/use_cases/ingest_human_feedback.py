@@ -99,6 +99,21 @@ class IngestHumanFeedbackUseCase:
                     agent_raw if isinstance(agent_raw, UUID) else UUID(str(agent_raw))
                 )
 
+                ts_raw = event_input.get("timestamp")
+                if isinstance(ts_raw, str):
+                    timestamp = datetime.fromisoformat(ts_raw)
+                elif isinstance(ts_raw, datetime):
+                    timestamp = ts_raw
+                else:
+                    timestamp = resolved_at
+
+                key_id = str(event_input.get("key_id", "v1"))
+                signature = str(
+                    event_input.get("signature")
+                    or event_input.get("producer_token")
+                    or ""
+                )
+
                 return HumanResolutionEvent(
                     event_id=str(event_input["event_id"]),
                     event_type=str(
@@ -123,11 +138,10 @@ class IngestHumanFeedbackUseCase:
                     producer_id=str(
                         event_input.get("producer_id", "arda.human-review-service")
                     ),
-                    producer_token=str(
-                        event_input.get(
-                            "producer_token", "arda-producer-secret-default"
-                        )
-                    ),
+                    key_id=key_id,
+                    signature=signature,
+                    producer_token=signature,
+                    timestamp=timestamp,
                 )
             except KeyError as ke:
                 raise EventValidationError(f"Missing required field: {ke}") from ke
