@@ -17,10 +17,27 @@ The initial reference seed dataset of 100 reference examples is available under 
 ### Quick Start & Verification
 
 ```bash
+# Start local PostgreSQL (pgvector) and Redpanda
+docker compose up -d postgres redpanda
+
+# Run database migrations
+.venv/bin/alembic upgrade head
+
 # Validate the dataset
 .venv/bin/python research/datasets/validate_dataset.py
 
-# Run the test suite
+# Run the complete test suite (193 tests)
 .venv/bin/pytest tests/ -v
 ```
+
+## Development Week 5: Asynchronous Human Feedback Ingestion
+
+The **Asynchronous Human Feedback Ingestion Pipeline** consumes authoritative human-adjudicated resolutions from Redpanda (`arda.human-resolutions.v1`), validates schemas, enforces database-level idempotency via `human_feedback_events`, generates 384-dimensional dense embeddings exclusively from original case descriptions (`BAAI/bge-small-en-v1.5`), and durably stores active reference examples into PostgreSQL (`reference_examples` with pgvector).
+
+- **Architecture & Design Document**: [`research/human_feedback_ingestion_design.md`](file:///home/aswin/second-project/arda-reliability-service/research/human_feedback_ingestion_design.md)
+- **Dead-Letter Queue (DLQ)**: Poison and permanently invalid events are routed to `arda.human-resolutions.dlq`.
+- **Conflict Handling**: Opposing human decisions on existing cases are recorded with status `CONFLICT` and prevented from silently corrupting reference data.
+- **Verification Suite**: [`tests/test_human_feedback_ingestion.py`](file:///home/aswin/second-project/arda-reliability-service/tests/test_human_feedback_ingestion.py) covers all 15 operational failure-recovery and lifecycle scenarios.
+- **Live Integration Suite**: [`tests/test_redpanda_real_integration.py`](file:///home/aswin/second-project/arda-reliability-service/tests/test_redpanda_real_integration.py) runs against live Redpanda and PostgreSQL containers.
+
 

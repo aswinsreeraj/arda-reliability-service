@@ -4,17 +4,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
 from arda_reliability_service.domain.exceptions import (
     DomainValidationError,
+    EventValidationError,
     InvalidDescriptionError,
     InvalidEmbeddingDimensionError,
+    UnreviewedAgentDecisionError,
+    UnsupportedEventVersionError,
 )
 
 VALID_LABELS = frozenset({"APPROVE", "REJECT"})
 VALID_STATUSES = frozenset({"active", "archived", "pending"})
+
+
+class HumanResolutionStatus(str, Enum):
+    """Lifecycle and outcome status of an ingested human resolution."""
+
+    PROCESSED = "PROCESSED"
+    IDEMPOTENT_DUPLICATE = "IDEMPOTENT_DUPLICATE"
+    CONFLICT = "CONFLICT"
+    FAILED = "FAILED"
 
 
 @dataclass
@@ -66,3 +79,66 @@ class ReferenceExample:
             )
         self.embedding = embedding
         self.updated_at = datetime.now(UTC)
+
+
+@dataclass
+class HumanResolutionEvent:
+    """Domain representation of an adjudicated human resolution event."""
+
+    event_id: str
+    event_type: str
+    event_version: str
+    tenant_id: UUID
+    agent_id: UUID
+    case_id: str
+    original_case_description: str
+    human_decision: str
+    proposed_decision: str
+    reviewer_id: str
+    resolved_at: datetime
+    correlation_id: str = ""
+
+    def __post_init__(self) -> None:
+        """Validate domain invariants for human resolution event."""
+        if not self.event_id or not self.event_id.strip():
+            raise EventValidationError("event_id must not be empty or whitespace.")
+
+        if self.event_version != "v1":
+            raise UnsupportedEventVersionError(
+                f"Unsupported event version '{self.event_version}'. Supported versions: ['v1']."
+            )
+
+        if not isinstance(self.tenant_id, UUID):
+            raise DomainValidationError("tenant_id must be a valid UUID instance.")
+
+        if not isinstance(self.agent_id, UUID):
+            raise DomainValidationError("agent_id must be a valid UUID instance.")
+
+        if not self.case_id or not self.case_id.strip():
+            raise DomainValidationError("case_id must not be empty or whitespace.")
+
+        if (
+            not self.original_case_description
+            or not self.original_case_description.strip()
+        ):
+            raise InvalidDescriptionError(
+                "original_case_description must not be empty or whitespace."
+            )
+
+        if self.human_decision not in VALID_LABELS:
+            raise UnreviewedAgentDecisionError(
+                f"human_decision '{self.human_decision}' is invalid. Authoritative human decision must be one of {sorted(VALID_LABELS)}."
+            )
+
+        if self.proposed_decision not in VALID_LABELS:
+            raise DomainValidationError(
+                f"proposed_decision '{self.proposed_decision}' is invalid. Must be one of {sorted(VALID_LABELS)}."
+            )
+
+        if not self.reviewer_id or not self.reviewer_id.strip():
+            raise DomainValidationError("reviewer_id must not be empty or whitespace.")
+
+        if not isinstance(self.resolved_at, datetime):
+            raise DomainValidationError(
+                "resolved_at must be a valid datetime instance."
+            )

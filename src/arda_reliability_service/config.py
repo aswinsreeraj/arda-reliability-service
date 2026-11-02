@@ -85,6 +85,36 @@ class Settings(BaseSettings):
         description="Grace period in seconds for graceful shutdown",
     )
 
+    # Redpanda / Kafka Messaging Settings
+    redpanda_brokers: str = Field(
+        default="127.0.0.1:19092",
+        description="Comma-separated bootstrap broker addresses",
+    )
+    redpanda_topic: str = Field(
+        default="arda.human-resolutions.v1",
+        description="Topic for authoritative human feedback resolution events",
+    )
+    redpanda_consumer_group: str = Field(
+        default="arda-reliability-feedback-group",
+        description="Consumer group identifier for feedback ingestion",
+    )
+    redpanda_dlq_topic: str = Field(
+        default="arda.human-resolutions.dlq",
+        description="Dead-letter queue topic for invalid or exhausted messages",
+    )
+    redpanda_max_retries: int = Field(
+        default=3,
+        description="Maximum transient retry attempts before dead-letter routing",
+    )
+    redpanda_retry_backoff_base_seconds: float = Field(
+        default=0.5,
+        description="Base backoff duration in seconds for transient retries",
+    )
+    redpanda_auto_offset_reset: str = Field(
+        default="earliest",
+        description="Offset reset strategy: 'earliest' or 'latest'",
+    )
+
     # Provisional Reliability Scoring & Gate Thresholds (Week 3 experimental defaults)
     # NOTE: These values are experimental defaults established for developmental gating.
     # They are provisional and NOT calibrated production thresholds.

@@ -45,3 +45,23 @@ class InvalidScoringConfigError(DomainValidationError):
 
 class ReliabilityEvaluationError(ReliabilityDomainError):
     """Raised when an error occurs during reliability evaluation orchestration."""
+
+
+class EventValidationError(DomainValidationError):
+    """Raised when an incoming human feedback event fails validation."""
+
+
+class UnsupportedEventVersionError(EventValidationError):
+    """Raised when an incoming event has an unsupported schema version."""
+
+
+class UnreviewedAgentDecisionError(DomainValidationError):
+    """Raised when an event lacks an authoritative human decision or attempts to promote an unreviewed decision."""
+
+
+class ConflictingHumanResolutionError(ReliabilityDomainError):
+    """Raised when an incoming human resolution conflicts with an existing authoritative reference."""
+
+
+class EventProcessingError(ReliabilityDomainError):
+    """Raised when an unrecoverable failure occurs during event processing."""

@@ -1,10 +1,17 @@
 """Domain layer exports."""
 
-from arda_reliability_service.domain.entities import ReferenceExample
+from arda_reliability_service.domain.entities import (
+    HumanResolutionEvent,
+    HumanResolutionStatus,
+    ReferenceExample,
+)
 from arda_reliability_service.domain.exceptions import (
     AgentIsolationViolationError,
+    ConflictingHumanResolutionError,
     DomainValidationError,
     DuplicateReferenceExampleError,
+    EventProcessingError,
+    EventValidationError,
     InvalidDescriptionError,
     InvalidEmbeddingDimensionError,
     InvalidProposedDecisionError,
@@ -13,6 +20,8 @@ from arda_reliability_service.domain.exceptions import (
     ReliabilityDomainError,
     ReliabilityEvaluationError,
     TenantIsolationViolationError,
+    UnreviewedAgentDecisionError,
+    UnsupportedEventVersionError,
 )
 from arda_reliability_service.domain.scoring_engine import (
     ReliabilityDecisionEngine,
@@ -33,10 +42,15 @@ from arda_reliability_service.domain.value_objects import (
 
 __all__ = [
     "AgentIsolationViolationError",
+    "ConflictingHumanResolutionError",
     "DomainValidationError",
     "DuplicateReferenceExampleError",
     "EvaluationReasonCode",
+    "EventProcessingError",
+    "EventValidationError",
     "GateDecision",
+    "HumanResolutionEvent",
+    "HumanResolutionStatus",
     "InvalidDescriptionError",
     "InvalidEmbeddingDimensionError",
     "InvalidProposedDecisionError",
@@ -56,4 +70,6 @@ __all__ = [
     "RetrievalResultSet",
     "ScoringConfig",
     "TenantIsolationViolationError",
+    "UnreviewedAgentDecisionError",
+    "UnsupportedEventVersionError",
 ]

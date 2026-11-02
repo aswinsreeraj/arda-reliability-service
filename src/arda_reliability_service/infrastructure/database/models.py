@@ -108,3 +108,68 @@ class ReferenceExampleModel(Base):
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
     )
+
+
+class HumanFeedbackEventModel(Base):
+    """Persistent audit and idempotency record for ingested human resolution events."""
+
+    __tablename__ = "human_feedback_events"
+
+    # Primary key
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    # Unique event tracking
+    event_id: Mapped[str] = mapped_column(
+        String(128), nullable=False, unique=True, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_version: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    # Tenant & Agent scoping
+    tenant_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=False, index=True
+    )
+    agent_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=False, index=True
+    )
+    case_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+
+    # Decision details
+    human_decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    proposed_decision: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reviewer_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # Ingestion outcome status ('PROCESSED', 'IDEMPOTENT_DUPLICATE', 'CONFLICT', 'FAILED')
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="PROCESSED", index=True
+    )
+
+    # Conflict diagnosis and metadata
+    conflict_details: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    correlation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # Timestamps
+    resolved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index(
+            "idx_human_feedback_events_tenant_agent_case",
+            "tenant_id",
+            "agent_id",
+            "case_id",
+        ),
+    )
