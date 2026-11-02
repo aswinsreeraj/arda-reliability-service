@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: arda-reliability-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-arda_reliability}
+      POSTGRES_USER: ${POSTGRES_USER:-arda_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arda_password}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-arda_user} -d ${POSTGRES_DB:-arda_reliability}" ]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 2s
+
+volumes:
+  pgvector_data:
+

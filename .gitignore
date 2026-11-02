@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Environment variables and secrets
+.env
+.env.local
+
 # Virtual environments
 .venv/
 venv/
