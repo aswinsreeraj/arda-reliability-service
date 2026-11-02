@@ -7,6 +7,8 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from arda_reliability_service.domain.value_objects import ScoringConfig
+
 
 class Settings(BaseSettings):
     """Central configuration for database, embeddings, and vector retrieval."""
@@ -60,6 +62,73 @@ class Settings(BaseSettings):
         default=64,
         description="Default HNSW ef_search parameter for approximate queries",
     )
+
+    # Provisional Reliability Scoring & Gate Thresholds (Week 3 experimental defaults)
+    # NOTE: These values are experimental defaults established for developmental gating.
+    # They are provisional and NOT calibrated production thresholds.
+    reliability_min_neighbor_count: int = Field(
+        default=3,
+        description="Minimum relevant neighbors required to avoid cold-start escalation",
+    )
+    reliability_min_similarity_threshold: float = Field(
+        default=0.70,
+        description="Cosine similarity floor below which a neighbor is considered irrelevant noise",
+    )
+    reliability_min_coverage_threshold: float = Field(
+        default=0.50,
+        description="Minimum evidence coverage factor required to qualify for PASS",
+    )
+    reliability_min_density_threshold: float = Field(
+        default=0.40,
+        description="Minimum evidence density factor required to qualify for PASS",
+    )
+    reliability_min_agreement_threshold: float = Field(
+        default=0.60,
+        description="Minimum precedent agreement factor required to qualify for PASS",
+    )
+    reliability_min_threshold: float = Field(
+        default=0.65,
+        description="Minimum raw reliability score required to qualify for PASS",
+    )
+    reliability_conflict_penalty_weight: float = Field(
+        default=0.50,
+        description="Penalty weight applied to coverage when relevant precedents conflict",
+    )
+    reliability_conflict_veto_similarity: float = Field(
+        default=0.95,
+        description="Extreme similarity threshold above which any conflicting neighbor triggers veto escalation",
+    )
+    reliability_density_peak_weight: float = Field(
+        default=0.50,
+        description="Weight given to top-1 neighbor similarity vs average cohort similarity in density",
+    )
+    reliability_weighting_strategy: str = Field(
+        default="similarity_weighted",
+        description="Precedent agreement weighting: 'similarity_weighted' or 'unweighted'",
+    )
+
+    def model_post_init(self, context: object, /) -> None:
+        """Validate scoring configuration during application startup."""
+        super().model_post_init(context)
+        # Validate that scoring config parameters satisfy domain invariants
+        self.get_scoring_config()
+
+    def get_scoring_config(self) -> ScoringConfig:
+        """Construct validated domain ScoringConfig from application settings."""
+        return ScoringConfig(
+            min_neighbor_count=self.reliability_min_neighbor_count,
+            min_similarity_threshold=self.reliability_min_similarity_threshold,
+            min_coverage_threshold=self.reliability_min_coverage_threshold,
+            min_density_threshold=self.reliability_min_density_threshold,
+            min_agreement_threshold=self.reliability_min_agreement_threshold,
+            min_reliability_threshold=self.reliability_min_threshold,
+            conflict_penalty_weight=self.reliability_conflict_penalty_weight,
+            conflict_veto_similarity=self.reliability_conflict_veto_similarity,
+            density_peak_weight=self.reliability_density_peak_weight,
+            top_k=self.default_retrieval_top_k,
+            ef_search=self.hnsw_ef_search,
+            weighting_strategy=self.reliability_weighting_strategy,
+        )
 
     @property
     def async_database_url(self) -> str:

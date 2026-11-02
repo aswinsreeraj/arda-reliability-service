@@ -1,5 +1,8 @@
 """Use cases exports."""
 
+from arda_reliability_service.application.use_cases.evaluate_reliability import (
+    EvaluateReliabilityUseCase,
+)
 from arda_reliability_service.application.use_cases.ingest_reference_examples import (
     IngestItemDTO,
     IngestReferenceExamplesUseCase,
@@ -9,6 +12,7 @@ from arda_reliability_service.application.use_cases.retrieve_reference_examples 
 )
 
 __all__ = [
+    "EvaluateReliabilityUseCase",
     "IngestItemDTO",
     "IngestReferenceExamplesUseCase",
     "RetrieveReferenceExamplesUseCase",

@@ -33,3 +33,15 @@ class DuplicateReferenceExampleError(ReliabilityDomainError):
 
 class ReferenceExampleNotFoundError(ReliabilityDomainError):
     """Raised when a requested reference example does not exist in the tenant/agent scope."""
+
+
+class InvalidProposedDecisionError(DomainValidationError):
+    """Raised when an incoming proposed decision is not supported (e.g. neither APPROVE nor REJECT)."""
+
+
+class InvalidScoringConfigError(DomainValidationError):
+    """Raised when scoring configuration thresholds violate mathematical or domain invariants."""
+
+
+class ReliabilityEvaluationError(ReliabilityDomainError):
+    """Raised when an error occurs during reliability evaluation orchestration."""

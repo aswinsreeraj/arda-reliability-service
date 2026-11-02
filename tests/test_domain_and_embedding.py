@@ -28,7 +28,13 @@ from arda_reliability_service.domain.exceptions import (
     InvalidEmbeddingDimensionError,
 )
 from arda_reliability_service.domain.value_objects import (
+    EvaluationReasonCode,
+    GateDecision,
+    ProposedDecision,
     ReferenceNeighbor,
+    ReliabilityEvaluationRequest,
+    ReliabilityEvaluationResult,
+    ReliabilityScore,
     RetrievalQuery,
     RetrievalResultSet,
 )
@@ -184,6 +190,52 @@ class TestDomainEntitiesAndValueObjects:
         assert len(result_set.neighbors) == 1
         assert result_set.retrieval_mode == "exact"
         assert result_set.execution_latency_ms == 12.5
+
+    def test_reliability_score_value_object(self) -> None:
+        score = ReliabilityScore(
+            agreement=0.85,
+            density_factor=0.75,
+            coverage_factor=0.90,
+            raw_score=0.5738,
+        )
+        assert score.agreement == 0.85
+        assert score.raw_score == 0.5738
+
+        with pytest.raises(DomainValidationError, match="raw_score must be within"):
+            ReliabilityScore(
+                agreement=1.0,
+                density_factor=0.5,
+                coverage_factor=0.5,
+                raw_score=1.5,
+            )
+
+    def test_reliability_evaluation_request_and_result(self) -> None:
+        tenant_id = uuid4()
+        agent_id = uuid4()
+        req = ReliabilityEvaluationRequest(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            case_description="Fraudulent transaction report",
+            proposed_decision=ProposedDecision.APPROVE.value,
+        )
+        assert req.proposed_decision == "APPROVE"
+
+        res = ReliabilityEvaluationResult(
+            decision=GateDecision.PASS,
+            proposed_decision="APPROVE",
+            raw_score=0.72,
+            agreement=1.0,
+            density_factor=0.8,
+            coverage_factor=0.9,
+            evidence_count=5,
+            matching_evidence_count=5,
+            conflicting_evidence_count=0,
+            evaluation_reason="Threshold met",
+            reason_code=EvaluationReasonCode.RELIABILITY_THRESHOLD_MET.value,
+            threshold_used=0.65,
+        )
+        assert res.decision == GateDecision.PASS
+        assert res.matching_evidence_count == 5
 
 
 class TestSentenceTransformerAdapter:
