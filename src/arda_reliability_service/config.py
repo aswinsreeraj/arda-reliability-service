@@ -153,9 +153,9 @@ class Settings(BaseSettings):
         description="Whether to strictly enforce producer authentication and reviewer screening",
     )
 
-    # Provisional Reliability Scoring & Gate Thresholds (Week 3 experimental defaults)
-    # NOTE: These values are experimental defaults established for developmental gating.
-    # They are provisional and NOT calibrated production thresholds.
+    # Provisional Reliability Scoring & Gate Thresholds
+    # Note: These values represent experimental defaults for precedent evaluation
+    # and should be calibrated against domain-specific operational data before production deployment.
     reliability_min_neighbor_count: int = Field(
         default=3,
         description="Minimum relevant neighbors required to avoid cold-start escalation",

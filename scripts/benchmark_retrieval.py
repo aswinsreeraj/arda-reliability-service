@@ -337,7 +337,7 @@ def generate_markdown_report(data: dict, output_path: Path) -> None:
 ## Exact Cosine Retrieval vs. HNSW Approximate Nearest Neighbors (pgvector)
 
 **Date**: November 2, 2026  
-**Scope**: Development Week 3 — PostgreSQL, pgvector & HNSW Retrieval Infrastructure  
+**Scope**: PostgreSQL, pgvector & HNSW Retrieval Infrastructure  
 **Dataset**: [`research/datasets/synthetic_seed_examples.json`](file:///home/aswin/second-project/arda-reliability-service/research/datasets/synthetic_seed_examples.json) ($N=100$, Audited Reference Seed)  
 **Database**: PostgreSQL 16.15 + pgvector 0.8.7 (`arda-reliability-postgres`)  
 **Embedding Model**: `BAAI/bge-small-en-v1.5` (384-dimensional dense vectors)  

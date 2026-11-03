@@ -71,8 +71,8 @@ class EvaluateReliabilityUseCase:
         cfg = custom_config or self.config
 
         try:
-            # CRITICAL RULE: Only the case description may be embedded.
-            # Never embed the proposed decision, reference label, rationale, or evaluation result.
+            # Note: only the case description is embedded; proposed decisions and labels are excluded
+            # to prevent target leakage.
             query = RetrievalQuery(
                 tenant_id=request.tenant_id,
                 agent_id=request.agent_id,

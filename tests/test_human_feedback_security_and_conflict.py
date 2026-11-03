@@ -1,28 +1,13 @@
-"""Comprehensive security, HMAC-SHA256 verification, and conflict hardening tests.
+"""Security, HMAC-SHA256 verification, and conflict quarantine tests.
 
-Tests satisfy all 15 required verification scenarios from Week 5 Audit:
-1. Correct HMAC signature accepted.
-2. Incorrect signature rejected.
-3. Modified event payload rejected.
-4. Modified tenant or agent ID rejected.
-5. Modified human decision rejected.
-6. Unknown producer rejected.
-7. Unknown key ID rejected.
-8. Expired signed event rejected.
-9. Valid event within clock-skew tolerance accepted.
-10. Replayed event safely handled through idempotency.
-11. Secret not included in logs.
-12. Secret not included in DLQ payload.
-13. Key rotation with current and previous valid keys.
-14. Conflict quarantine still works.
-15. Offset is not committed after failed authentication and unsuccessful DLQ publication.
-
-Plus additional boundary and race hardening tests:
-- Reviewer screening against bot identities.
-- Quarantined reference excluded from retrieval and evaluation.
-- Duplicate delivery after quarantine does not reactivate.
-- Concurrent conflicting events quarantine safely.
-- Database uniqueness race handled gracefully.
+Verifies:
+- Producer HMAC-SHA256 signature verification and payload tampering detection.
+- Key rotation support with overlapping active and retiring keys.
+- Timestamp freshness evaluation and replay attack defense.
+- Redaction of sensitive signing secrets from logs and DLQ payloads.
+- Conflicting authoritative human resolution detection and reference quarantine.
+- Retrieval exclusion of quarantined precedents.
+- Dead-letter queue publication and offset commit guarantees.
 - Sequential partition processing offset safety.
 - Consumer shutdown with unfinished messages leaves offset uncommitted.
 - Tenant and agent isolation preserved after conflict quarantine.
@@ -240,17 +225,12 @@ def make_test_event_dict(
         return raw
 
 
-# ==============================================================================
-# SECTION 7: 15 REQUIRED TEST SCENARIOS
-# ==============================================================================
-
-
 @pytest.mark.asyncio
-async def test_scenario_1_correct_hmac_signature_accepted(
+async def test_valid_hmac_signature_persists_reference(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """1. Correct HMAC signature accepted: validly signed event persists active reference."""
+    """Validly signed event is accepted, verified, and persists active reference."""
     producer = MockKafkaProducer()
     consumer = RedpandaFeedbackConsumer(
         session_factory=session_factory,
@@ -287,11 +267,11 @@ async def test_scenario_1_correct_hmac_signature_accepted(
 
 
 @pytest.mark.asyncio
-async def test_scenario_2_incorrect_signature_rejected(
+async def test_invalid_signature_routed_to_dlq(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """2. Incorrect signature rejected: routed to DLQ with InvalidSignatureError."""
+    """Invalid HMAC signature is rejected and routed to DLQ."""
     producer = MockKafkaProducer()
     consumer = RedpandaFeedbackConsumer(
         session_factory=session_factory,
@@ -314,11 +294,11 @@ async def test_scenario_2_incorrect_signature_rejected(
 
 
 @pytest.mark.asyncio
-async def test_scenario_3_modified_event_payload_rejected(
+async def test_tampered_payload_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """3. Modified event payload rejected: altering description invalidates HMAC signature."""
+    """Altering payload description after signing invalidates the HMAC signature."""
     producer = MockKafkaProducer()
     consumer = RedpandaFeedbackConsumer(
         session_factory=session_factory,
@@ -346,11 +326,11 @@ async def test_scenario_3_modified_event_payload_rejected(
 
 
 @pytest.mark.asyncio
-async def test_scenario_4_modified_tenant_or_agent_id_rejected(
+async def test_tampered_tenant_or_agent_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """4. Modified tenant or agent ID rejected: cross-tenant tampering fails verification."""
+    """Altering tenant_id after signing invalidates the HMAC signature."""
     producer = MockKafkaProducer()
     consumer = RedpandaFeedbackConsumer(
         session_factory=session_factory,
@@ -382,11 +362,11 @@ async def test_scenario_4_modified_tenant_or_agent_id_rejected(
 
 
 @pytest.mark.asyncio
-async def test_scenario_5_modified_human_decision_rejected(
+async def test_tampered_decision_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """5. Modified human decision rejected: flipping decision invalidates signature."""
+    """Flipping human_decision after signing invalidates the HMAC signature."""
     producer = MockKafkaProducer()
     consumer = RedpandaFeedbackConsumer(
         session_factory=session_factory,
@@ -413,11 +393,11 @@ async def test_scenario_5_modified_human_decision_rejected(
 
 
 @pytest.mark.asyncio
-async def test_scenario_6_unknown_producer_rejected(
+async def test_untrusted_producer_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """6. Unknown producer rejected: unknown producer_id routed to DLQ."""
+    """Events from unknown producers are rejected and routed to DLQ."""
     producer = MockKafkaProducer()
     consumer = RedpandaFeedbackConsumer(
         session_factory=session_factory,
@@ -440,11 +420,11 @@ async def test_scenario_6_unknown_producer_rejected(
 
 
 @pytest.mark.asyncio
-async def test_scenario_7_unknown_key_id_rejected(
+async def test_unknown_key_id_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """7. Unknown key ID rejected: key rotation identifier not configured."""
+    """Events specifying an unconfigured key_id are rejected."""
     producer = MockKafkaProducer()
     consumer = RedpandaFeedbackConsumer(
         session_factory=session_factory,
@@ -467,13 +447,12 @@ async def test_scenario_7_unknown_key_id_rejected(
 
 
 @pytest.mark.asyncio
-async def test_scenario_8_expired_signed_event_rejected(
+async def test_expired_event_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """8. Expired signed event rejected: event older than max_event_age is rejected."""
+    """Events older than max_event_age are rejected as expired."""
     producer = MockKafkaProducer()
-    # Configure tight age window of 60 seconds
     authorizer = TrustedProducerAuthorizer(max_event_age_seconds=60.0)
     consumer = RedpandaFeedbackConsumer(
         session_factory=session_factory,
@@ -500,11 +479,11 @@ async def test_scenario_8_expired_signed_event_rejected(
 
 
 @pytest.mark.asyncio
-async def test_scenario_9_valid_event_within_clock_skew_tolerance_accepted(
+async def test_event_within_clock_skew_accepted(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """9. Valid event within clock-skew tolerance accepted: future timestamp within tolerance accepted."""
+    """Timestamps slightly in the future within clock-skew tolerance are accepted."""
     producer = MockKafkaProducer()
     authorizer = TrustedProducerAuthorizer(clock_skew_tolerance_seconds=60.0)
     consumer = RedpandaFeedbackConsumer(
@@ -541,11 +520,11 @@ async def test_scenario_9_valid_event_within_clock_skew_tolerance_accepted(
 
 
 @pytest.mark.asyncio
-async def test_scenario_10_replayed_event_safely_handled_through_idempotency(
+async def test_replayed_event_idempotency(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """10. Replayed event safely handled through idempotency: replay within freshness window returns duplicate."""
+    """Replayed event within the freshness window is handled idempotently without duplication."""
     producer = MockKafkaProducer()
     consumer = RedpandaFeedbackConsumer(
         session_factory=session_factory,
@@ -570,7 +549,7 @@ async def test_scenario_10_replayed_event_safely_handled_through_idempotency(
     res1 = await consumer.process_single_message(msg)
     assert res1 is True
 
-    # Replay attack (exact same signed message re-sent)
+    # Replay delivery (exact same message re-sent)
     res2 = await consumer.process_single_message(msg)
     assert res2 is True
 
@@ -586,12 +565,12 @@ async def test_scenario_10_replayed_event_safely_handled_through_idempotency(
 
 
 @pytest.mark.asyncio
-async def test_scenario_11_secret_not_included_in_logs(
+async def test_secret_redacted_from_logs(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """11. Secret not included in logs: sensitive key material is never logged on failures."""
+    """Sensitive signing key material is never printed in logs."""
     sensitive_secret = "super-confidential-producer-secret-8877"
     producer = MockKafkaProducer()
     authorizer = TrustedProducerAuthorizer(
@@ -613,18 +592,17 @@ async def test_scenario_11_secret_not_included_in_logs(
         msg = MockKafkaMessage(json.dumps(payload))
         await consumer.process_single_message(msg)
 
-    # Check all captured log messages
     for record in caplog.records:
         assert sensitive_secret not in record.message
         assert sensitive_secret not in str(record.exc_info)
 
 
 @pytest.mark.asyncio
-async def test_scenario_12_secret_not_included_in_dlq_payload(
+async def test_secret_redacted_from_dlq(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """12. Secret not included in DLQ payload: DLQ error record never leaks signing secret."""
+    """Dead-letter queue diagnostic records never expose signing secrets."""
     sensitive_secret = "ultra-secret-dlq-protection-key-9911"
     producer = MockKafkaProducer()
     authorizer = TrustedProducerAuthorizer(
@@ -652,11 +630,11 @@ async def test_scenario_12_secret_not_included_in_dlq_payload(
 
 
 @pytest.mark.asyncio
-async def test_scenario_13_key_rotation_with_current_and_previous_valid_keys(
+async def test_key_rotation_supports_active_and_previous_keys(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """13. Key rotation: authorizer verifies both retiring (v1) and active (v2) keys."""
+    """Authorizer simultaneously accepts retiring and active keys during key rotation."""
     old_secret_v1 = "legacy-secret-retiring-key-v1"
     new_secret_v2 = "active-secret-primary-key-v2"
 
@@ -697,7 +675,7 @@ async def test_scenario_13_key_rotation_with_current_and_previous_valid_keys(
     payload_mismatch = make_test_event_dict(
         case_id=f"case-rot-bad-{uuid4().hex[:8]}",
         key_id="v1",
-        secret=new_secret_v2,  # wrong secret for v1!
+        secret=new_secret_v2,
     )
     msg_mismatch = MockKafkaMessage(json.dumps(payload_mismatch))
     producer_dlq = MockKafkaProducer()
@@ -714,11 +692,11 @@ async def test_scenario_13_key_rotation_with_current_and_previous_valid_keys(
 
 
 @pytest.mark.asyncio
-async def test_scenario_14_conflict_quarantine_still_works(
+async def test_conflicting_resolutions_quarantine_reference(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """14. Conflict quarantine: signed opposing resolutions transition reference to quarantined."""
+    """Signed opposing human resolutions transition reference to quarantined state."""
     tenant_id = uuid4()
     agent_id = uuid4()
     case_id = f"case-quar-check-{uuid4().hex[:8]}"
@@ -763,11 +741,11 @@ async def test_scenario_14_conflict_quarantine_still_works(
 
 
 @pytest.mark.asyncio
-async def test_scenario_15_offset_not_committed_after_failed_auth_and_unsuccessful_dlq(
+async def test_dlq_failure_prevents_offset_commit(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: DeterministicMockEmbedder,
 ) -> None:
-    """15. Offset safety: offset is NOT committed when DLQ publication fails for unauthorized event."""
+    """Consumer offset is not committed when DLQ publication fails for an unauthorized event."""
     failing_producer = MockKafkaProducer(fail_dlq=True)
     consumer_mock = MockKafkaConsumer()
     consumer = RedpandaFeedbackConsumer(
@@ -785,19 +763,12 @@ async def test_scenario_15_offset_not_committed_after_failed_auth_and_unsuccessf
     msg = MockKafkaMessage(json.dumps(payload), offset=123)
 
     should_commit = await consumer.process_single_message(msg)
-    # Must return False because DLQ write failed!
     assert should_commit is False
 
     if should_commit:
         await consumer._commit_message_offset(msg)
 
-    # Consumer offset must NOT be committed
     assert len(consumer_mock.committed) == 0
-
-
-# ==============================================================================
-# ADDITIONAL CONFLICT, ISOLATION, AND RECOVERY REGRESSION TESTS
-# ==============================================================================
 
 
 @pytest.mark.asyncio

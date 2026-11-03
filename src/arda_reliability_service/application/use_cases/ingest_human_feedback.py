@@ -159,14 +159,12 @@ class IngestHumanFeedbackUseCase:
         Returns:
             IngestHumanFeedbackResult describing the processing outcome.
         """
-        # 1. Validation & Domain Normalization
         event = self._normalize_event(event_input)
 
-        # 1b. Producer & Reviewer Authorization
         if self.authorizer is not None:
             self.authorizer.authorize_event(event)
 
-        # 2. Idempotency Check on Event ID
+        # Idempotency check: drop duplicates by event_id
         existing_event = await self.repository.get_processed_event(event.event_id)
         if existing_event is not None:
             logger.info(
@@ -185,7 +183,7 @@ class IngestHumanFeedbackUseCase:
                 reference_created=False,
             )
 
-        # 3. Check for Existing Reference Example by Business Case ID
+        # Precedent check: evaluate existing references for the same business case ID
         existing_reference = await self.repository.get_reference_example(
             tenant_id=event.tenant_id,
             agent_id=event.agent_id,
@@ -267,14 +265,12 @@ class IngestHumanFeedbackUseCase:
                 conflict_details=conflict_details,
             )
 
-        # 4. Generate Embedding from Original Case Description ONLY
-        # INVARIANT: Embed only the natural language narrative; never labels, decisions, or reviewer IDs.
+        # Embed only the case description narrative (excluding labels/metadata)
         embedding = self.embedding_provider.generate_embedding(
             text=event.original_case_description,
             is_query=False,
         )
 
-        # 5. Construct New Reference Example
         reference = ReferenceExample(
             example_id=event.case_id,
             tenant_id=event.tenant_id,
@@ -298,7 +294,7 @@ class IngestHumanFeedbackUseCase:
             expected_dim=self.embedding_provider.dimension,
         )
 
-        # 6. Atomically Persist Reference and Audit Event Record
+        # Atomically commit reference example and feedback audit record
         created = await self.repository.save_reference_and_event(
             event=event, reference=reference
         )

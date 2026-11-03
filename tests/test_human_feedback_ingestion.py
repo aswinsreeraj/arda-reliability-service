@@ -213,17 +213,12 @@ def make_valid_event_dict(
     return sign_event(raw_ev, secret="arda-producer-secret-default", key_id="v1")
 
 
-# ==============================================================================
-# SCENARIOS 1-15 VERIFICATION
-# ==============================================================================
-
-
 @pytest.mark.asyncio
-async def test_scenario_1_valid_human_resolution_event(
+async def test_valid_human_resolution_event_persists_reference(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """1. Valid human-resolution event: parsed, embedded, and durably persisted."""
+    """Valid human-resolution event is parsed, embedded, and durably persisted as a reference."""
     tenant_id = uuid4()
     agent_id = uuid4()
     case_id = f"case-{uuid4().hex[:8]}"
@@ -268,16 +263,15 @@ async def test_scenario_1_valid_human_resolution_event(
 
 
 @pytest.mark.asyncio
-async def test_scenario_2_invalid_event_payload(
+async def test_invalid_event_payload_validation_error(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """2. Invalid event payload: missing fields, empty strings, malformed json."""
+    """Malformed event payloads with missing or blank fields are rejected at schema validation."""
     # Missing required field
     bad_payload_missing = {
         "event_id": "evt-bad-1",
         "tenant_id": str(uuid4()),
-        # missing case_id, description, decision, etc.
     }
     with pytest.raises(ValidationError):
         HumanResolutionEventDTO.model_validate(bad_payload_missing)
@@ -295,11 +289,11 @@ async def test_scenario_2_invalid_event_payload(
 
 
 @pytest.mark.asyncio
-async def test_scenario_3_unsupported_event_version(
+async def test_unsupported_event_version_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """3. Unsupported event version: rejected with UnsupportedEventVersionError."""
+    """Events with unsupported schema versions raise UnsupportedEventVersionError."""
     payload_v2 = make_valid_event_dict()
     payload_v2["event_version"] = "v2"
 
@@ -308,11 +302,11 @@ async def test_scenario_3_unsupported_event_version(
 
 
 @pytest.mark.asyncio
-async def test_scenario_4_duplicate_event_delivery(
+async def test_duplicate_event_idempotency(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """4. Duplicate event delivery: reprocessing same event_id is an idempotent no-op."""
+    """Reprocessing the same event_id is an idempotent no-op without duplicate embedding."""
     tenant_id = uuid4()
     agent_id = uuid4()
     case_id = f"case-{uuid4().hex[:8]}"
@@ -352,11 +346,11 @@ async def test_scenario_4_duplicate_event_delivery(
 
 
 @pytest.mark.asyncio
-async def test_scenario_5_concurrent_duplicate_delivery(
+async def test_concurrent_duplicate_delivery(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """5. Concurrent duplicate delivery: database uniqueness prevents duplicate records."""
+    """Concurrent deliveries of identical event are safely serialized by database constraints."""
     tenant_id = uuid4()
     agent_id = uuid4()
     case_id = f"case-{uuid4().hex[:8]}"
@@ -401,11 +395,11 @@ async def test_scenario_5_concurrent_duplicate_delivery(
 
 
 @pytest.mark.asyncio
-async def test_scenario_6_database_failure(
+async def test_database_failure_raises_exception(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """6. Database failure: consumer retries and routes to DLQ when exhausted."""
+    """Database connection failures retry with backoff and route to DLQ when exhausted."""
 
     # Create failing session factory
     class FailingSession:
@@ -444,10 +438,10 @@ async def test_scenario_6_database_failure(
 
 
 @pytest.mark.asyncio
-async def test_scenario_7_embedding_failure(
+async def test_embedding_failure_rolls_back(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """7. Embedding failure: does NOT create partial/corrupt reference example without embedding."""
+    """Embedding generation failure rolls back transaction without creating corrupt records."""
     tenant_id = uuid4()
     agent_id = uuid4()
     case_id = f"case-{uuid4().hex[:8]}"
@@ -485,11 +479,11 @@ async def test_scenario_7_embedding_failure(
 
 
 @pytest.mark.asyncio
-async def test_scenario_8_consumer_restart_and_redelivery(
+async def test_consumer_restart_and_redelivery(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """8. Consumer restart and redelivery: uncommitted message redelivered is safely processed."""
+    """Consumer restart and uncommitted message redelivery is safely handled idempotently."""
     tenant_id = uuid4()
     agent_id = uuid4()
     case_id = f"case-{uuid4().hex[:8]}"
@@ -528,11 +522,11 @@ async def test_scenario_8_consumer_restart_and_redelivery(
 
 
 @pytest.mark.asyncio
-async def test_scenario_9_conflicting_human_resolutions(
+async def test_conflicting_human_resolutions_quarantines_reference(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """9. Conflicting human resolutions: detected, recorded with status CONFLICT, never silently overwritten."""
+    """Conflicting human resolutions are recorded as CONFLICT and do not overwrite precedents."""
     tenant_id = uuid4()
     agent_id = uuid4()
     case_id = f"case-conflict-{uuid4().hex[:8]}"
@@ -587,11 +581,11 @@ async def test_scenario_9_conflicting_human_resolutions(
 
 
 @pytest.mark.asyncio
-async def test_scenario_10_and_11_tenant_and_agent_isolation(
+async def test_tenant_and_agent_isolation(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """10 & 11. Tenant and Agent isolation: cross-tenant and cross-agent references are strictly isolated."""
+    """References are strictly isolated across tenants and agents, even with identical case IDs."""
     tenant_a = uuid4()
     tenant_b = uuid4()
     agent_1 = uuid4()
@@ -649,11 +643,11 @@ async def test_scenario_10_and_11_tenant_and_agent_isolation(
 
 
 @pytest.mark.asyncio
-async def test_scenario_12_rejection_of_unreviewed_agent_decisions(
+async def test_rejection_of_unreviewed_agent_decisions(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """12. Rejection of unreviewed agent decisions: human_decision must be authoritative APPROVE or REJECT."""
+    """Non-authoritative decision values are rejected at validation."""
     payload_unreviewed = make_valid_event_dict()
     payload_unreviewed["human_decision"] = "UNREVIEWED"
 
@@ -669,10 +663,10 @@ async def test_scenario_12_rejection_of_unreviewed_agent_decisions(
 
 
 @pytest.mark.asyncio
-async def test_scenario_13_successful_persistence_and_subsequent_retrieval(
+async def test_persistence_and_subsequent_retrieval(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """13. Successful persistence and subsequent retrieval: newly ingested reference is retrievable via vector similarity."""
+    """Newly ingested reference is immediately retrievable via vector similarity search."""
     real_embedder = SentenceTransformerEmbeddingAdapter()
     tenant_id = uuid4()
     agent_id = uuid4()
@@ -729,11 +723,11 @@ async def test_scenario_13_successful_persistence_and_subsequent_retrieval(
 
 
 @pytest.mark.asyncio
-async def test_scenario_14_graceful_shutdown(
+async def test_consumer_graceful_shutdown(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """14. Graceful shutdown: consumer loop exits cleanly on stop()."""
+    """Consumer loop terminates cleanly when stop() is called without dropping messages."""
     mock_consumer = MockKafkaConsumer()
     mock_producer = MockKafkaProducer()
 
@@ -755,11 +749,11 @@ async def test_scenario_14_graceful_shutdown(
 
 
 @pytest.mark.asyncio
-async def test_scenario_15_dead_letter_handling(
+async def test_dead_letter_routing_on_invalid_event(
     session_factory: async_sessionmaker[AsyncSession],
     mock_embedder: MockEmbeddingProvider,
 ) -> None:
-    """15. Dead-letter handling: malformed messages forwarded to DLQ and offset committed."""
+    """Malformed or invalid events are published to DLQ and the offset is committed."""
     mock_producer = MockKafkaProducer()
     metrics = ConsumerMetrics()
 

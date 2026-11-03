@@ -248,13 +248,13 @@ class TrustedProducerAuthorizer(EventAuthorizerPort):
           of the upstream review service boundary, which must authenticate human reviewers before signing.
         """
         if self.enforce_producer_auth:
-            # 1. Producer Identity Verification
+            # Verify producer is in trusted whitelist
             if event.producer_id not in self.trusted_producers:
                 raise UnauthorizedProducerError(
                     f"Untrusted event producer '{event.producer_id}'. Authorized producers: {sorted(self.trusted_producers)}"
                 )
 
-            # 2. Key ID & Secret Lookup
+            # Look up signing key
             prod_keys = self.producer_secrets.get(event.producer_id, {})
             if not prod_keys:
                 raise UnauthorizedProducerError(
@@ -273,14 +273,14 @@ class TrustedProducerAuthorizer(EventAuthorizerPort):
                     f"Unknown key_id '{key_id}' for producer '{event.producer_id}'."
                 )
 
-            # 3. Signature Presence
+            # Verify signature presence
             supplied_sig = (event.signature or "").strip()
             if not supplied_sig:
                 raise UnauthorizedProducerError(
                     f"Missing HMAC signature for event '{event.event_id}' from producer '{event.producer_id}'."
                 )
 
-            # 4. Freshness and Replay Timestamp Defense
+            # Verify timestamp freshness to mitigate replay attacks
             current_time = now or datetime.now(UTC)
             event_ts = event.get_event_timestamp()
             if event_ts.tzinfo is None:
@@ -298,7 +298,7 @@ class TrustedProducerAuthorizer(EventAuthorizerPort):
                     f"Event '{event.event_id}' timestamp {event_ts.isoformat()} is {abs(age):.1f}s in future (exceeds clock skew tolerance of {self.clock_skew_tolerance_seconds}s)."
                 )
 
-            # 5. Canonical Serialization & HMAC-SHA256 Signature Verification
+            # Verify HMAC-SHA256 signature against canonical payload
             canonical_payload = build_canonical_payload(event)
             computed_sig = compute_hmac_signature(secret, canonical_payload)
 
@@ -309,7 +309,7 @@ class TrustedProducerAuthorizer(EventAuthorizerPort):
                     f"HMAC-SHA256 signature verification failed for event '{event.event_id}' from producer '{event.producer_id}'."
                 )
 
-        # 6. Reviewer Identity Screening
+        # Defensive filter: screen reviewer identity against bot/unauthorized patterns
         if not event.reviewer_id or not event.reviewer_id.strip():
             raise UnauthorizedReviewerError(
                 "Missing or empty reviewer_id in human resolution event."

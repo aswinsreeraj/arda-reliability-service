@@ -76,9 +76,8 @@ class ReliabilityScore:
 class ScoringConfig:
     """Provisional scoring and gating configuration for reliability evaluation.
 
-    NOTE: All thresholds in this configuration are provisional experimental defaults
-    established during Week 3 development. They are NOT calibrated production values.
-    Formal confidence calibration is scheduled for a subsequent milestone.
+    Thresholds in this configuration represent baseline defaults for precedent evaluation
+    and should be calibrated against domain-specific operational data before production deployment.
     """
 
     min_neighbor_count: int = 3

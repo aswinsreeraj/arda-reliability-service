@@ -1,4 +1,4 @@
-"""Unit and integration tests for Confidence Calibration and Evaluation (Week 4)."""
+"""Unit and integration tests for Confidence Calibration and Evaluation."""
 
 from __future__ import annotations
 

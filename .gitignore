@@ -23,6 +23,7 @@ htmlcov/
 
 # Experiment artifacts and caches
 research/experiments/.cache/
+research/datasets/benchmark_scales/
 *.embedding_cache.pkl
 *.embedding_cache.json
 

@@ -196,7 +196,7 @@ class RedpandaFeedbackConsumer:
         start_time = time.monotonic()
         raw_value = getattr(msg, "value", b"")
 
-        # 1. Parse JSON
+        # Decode JSON payload
         try:
             if isinstance(raw_value, bytes):
                 text_val = raw_value.decode("utf-8")
@@ -220,7 +220,7 @@ class RedpandaFeedbackConsumer:
                 },
             )
 
-        # 2. Schema and Authorization Validation
+        # Validate event schema and producer authorization
         try:
             dto = HumanResolutionEventDTO.model_validate(payload_dict)
             if self.authorizer is not None:
@@ -253,7 +253,7 @@ class RedpandaFeedbackConsumer:
                 },
             )
 
-        # 3. Process Event with Bounded Retries
+        # Process event within database transaction, retrying on transient errors
         attempts = 0
         backoff = self.retry_backoff_base
 
