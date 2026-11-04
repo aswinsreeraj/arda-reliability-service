@@ -73,22 +73,24 @@ The platform is designed to govern arbitrary agents across any tenant:
 
 ### 3. Decomposed Multiplicative Reliability Scoring
 Rather than relying on unweighted averages, the scoring engine calculates:
+
 $$R = \text{Agreement} \times \text{Density} \times \text{Coverage}$$
 
 - **Agreement ($A \in [0.0, 1.0]$)**: Similarity-weighted consensus of retrieved precedents with the agent's proposed action:
   $$A = \frac{\sum_{i \in \text{Matching}} \max(0, s_i)}{\sum_{i=1}^K \max(0, s_i)}$$
-- **Density ($D \in [0.0, 1.0]$)**: Measures cluster proximity above a relevance floor ($s_{\min} = 0.70$), blending the top precedent ($\alpha=0.7$) with cohort averages.
-- **Coverage ($C \in [0.0, 1.0]$)**: Penalizes small sample sizes, low relevance ratios, and conflicting precedent evidence near decision boundaries ($\text{clarity} = 1.0 - \beta \cdot \text{conflict\_rate}$).
+- **Density ($D \in [0.0, 1.0]$)**: Measures cluster proximity above a relevance floor ($s_{\text{min}} = 0.70$), blending the top precedent ($\alpha = 0.7$) with cohort averages.
+- **Coverage ($C \in [0.0, 1.0]$)**: Penalizes small sample sizes, low relevance ratios, and conflicting precedent evidence near decision boundaries:
+  $$\text{clarity} = 1.0 - (\beta \times \text{conflict rate})$$
 - **Multiplicative Veto Property**: If any factor collapses towards zero (e.g. out-of-distribution cold start or severe precedent conflict), the overall score $R$ strictly drops to zero.
 
 ### 4. Hierarchical Policy Gate Hierarchy
 The `ReliabilityDecisionEngine` enforces six strict, non-bypassable checks in priority order:
-1. **Cold Start**: Fewer than $N_{\min} = 3$ relevant neighbors ($s \ge 0.70$) $\to$ `ESCALATE` (`COLD_START_INSUFFICIENT_EVIDENCE`).
-2. **Coverage Floor**: Coverage $< 0.40$ $\to$ `ESCALATE` (`INSUFFICIENT_COVERAGE`).
-3. **Density Floor**: Density $< 0.40$ $\to$ `ESCALATE` (`WEAK_EVIDENCE_DENSITY`).
-4. **Contrastive Veto**: Conflicting precedent with similarity $s \ge 0.95$ $\to$ `ESCALATE` (`HIGH_SIMILARITY_CONFLICT`).
-5. **Agreement Floor**: Agreement $< 0.60$ $\to$ `ESCALATE` (`CONFLICTING_EVIDENCE`).
-6. **Reliability Threshold**: $R < \text{threshold}$ (default $0.65$) $\to$ `ESCALATE` (`SCORE_BELOW_THRESHOLD`).
+1. **Cold Start**: Fewer than $N_{\text{min}} = 3$ relevant neighbors ($s \ge 0.70$) → `ESCALATE` (`COLD_START_INSUFFICIENT_EVIDENCE`).
+2. **Coverage Floor**: Coverage $< 0.40$ → `ESCALATE` (`INSUFFICIENT_COVERAGE`).
+3. **Density Floor**: Density $< 0.40$ → `ESCALATE` (`WEAK_EVIDENCE_DENSITY`).
+4. **Contrastive Veto**: Conflicting precedent with similarity $s \ge 0.95$ → `ESCALATE` (`HIGH_SIMILARITY_CONFLICT`).
+5. **Agreement Floor**: Agreement $< 0.60$ → `ESCALATE` (`CONFLICTING_EVIDENCE`).
+6. **Reliability Threshold**: $R < \text{threshold}$ (default $0.65$) → `ESCALATE` (`SCORE_BELOW_THRESHOLD`).
 7. **PASS**: Allowed only when all 6 checks are satisfied (`RELIABILITY_THRESHOLD_MET`).
 
 ### 5. Evidence-Driven Confidence Calibration
@@ -151,8 +153,8 @@ An interactive demonstration script is available to walk through the complete go
 ```
 
 ### Demonstration Flow:
-1. **Scenario 1 (PASS)**: High-evidence precedent where retrieved neighbors unanimously support `APPROVE`. Decomposed score exceeds threshold $\to$ `PASS (RELIABILITY_THRESHOLD_MET)`. Go runtime allows autonomous execution.
-2. **Scenario 2 (ESCALATE)**: Novel SaaS dispute with conflicting historical decisions. Agreement drops below 0.60 floor $\to$ `ESCALATE (CONFLICTING_EVIDENCE)`. Go runtime fails closed to human supervisor.
+1. **Scenario 1 (PASS)**: High-evidence precedent where retrieved neighbors unanimously support `APPROVE`. Decomposed score exceeds threshold → `PASS (RELIABILITY_THRESHOLD_MET)`. Go runtime allows autonomous execution.
+2. **Scenario 2 (ESCALATE)**: Novel SaaS dispute with conflicting historical decisions. Agreement drops below 0.60 floor → `ESCALATE (CONFLICTING_EVIDENCE)`. Go runtime fails closed to human supervisor.
 3. **Scenario 3 (Human Ingestion)**: Auditor Alice resolves dispute. Review portal signs event with HMAC-SHA256 and publishes to Redpanda. Consumer verifies signature and indexes 384-d vector into PostgreSQL.
 4. **Scenario 4 (Closed-Loop Evolution)**: Re-evaluating the dispute immediately retrieves Alice's decision as Neighbor #1 ($s \ge 0.99$), boosting density and clearing the conflict veto live!
 
