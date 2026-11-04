@@ -12,7 +12,6 @@ from arda_reliability_service.domain.exceptions import InvalidProposedDecisionEr
 from arda_reliability_service.domain.value_objects import (
     EvaluationReasonCode,
     GateDecision,
-    ProposedDecision,
     ReferenceNeighbor,
     ReliabilityScore,
     ScoringConfig,
@@ -49,13 +48,17 @@ class ReliabilityScoringEngine:
         Returns:
             Agreement value bounded in [0.0, 1.0].
         """
-        valid_decisions = {
-            ProposedDecision.APPROVE.value,
-            ProposedDecision.REJECT.value,
-        }
-        if proposed_decision not in valid_decisions:
+        if not proposed_decision or not proposed_decision.strip():
             raise InvalidProposedDecisionError(
-                f"Invalid proposed_decision '{proposed_decision}'. Must be one of {sorted(valid_decisions)}."
+                "proposed_decision cannot be empty or whitespace."
+            )
+
+        if (
+            config.allowed_decisions is not None
+            and proposed_decision not in config.allowed_decisions
+        ):
+            raise InvalidProposedDecisionError(
+                f"Invalid proposed_decision '{proposed_decision}'. Must be one of {sorted(config.allowed_decisions)}."
             )
 
         if not neighbors:

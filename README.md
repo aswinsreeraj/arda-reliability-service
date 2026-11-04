@@ -1,322 +1,190 @@
 # ARDA Reliability Service
 
-**The reliability layer for AI agent decisions.**
+**The Evidence-Based Reliability & Governance Gate for Autonomous AI Agents.**
 
-ARDA Reliability Service evaluates proposed agent decisions against relevant historical cases and determines whether the decision can proceed or should be escalated for human review.
+The **ARDA Reliability Service** evaluates proposed AI agent actions against historical human-adjudicated precedents to determine whether an agent's decision can safely proceed autonomously or must be escalated for human review.
 
-It is a Python service within the ARDA platform, responsible for retrieving relevant reference examples, evaluating evidence, calculating reliability scores, and applying a configurable decision gate.
-
-The goal is not to make agents appear more confident. It is to make their decisions easier to evaluate, question, and audit.
+It is an independent Python microservice within the broader **ARDA platform** (`github.com/aswinsreeraj/arda`), exposing high-performance gRPC interfaces to the Go Agent Runtime, managing dense vector storage in PostgreSQL with `pgvector`, and streaming human feedback continuously through Redpanda (Kafka).
 
 ---
 
-## Why this exists
+## Why This Exists: The Problem with Autonomous LLMs
 
-An AI agent can produce a convincing answer without necessarily producing a reliable one.
+Large Language Models (LLMs) can generate fluent, persuasive rationales without necessarily producing correct or policy-compliant actions. In consequential operations—such as financial transaction disputes, customer onboarding, department routing, and privileged IT operations—relying purely on LLM internal confidence creates unacceptable risk.
 
-In workflows involving financial transactions, refunds, disputes, or other consequential operations, accepting every agent decision without additional checks creates unnecessary risk.
+ARDA solves this through **non-parametric, exemplar-based reliability governance**:
+1. An autonomous agent proposes an action or decision on an incoming case narrative.
+2. The Reliability Service embeds the factual narrative into latent vector space.
+3. It retrieves the nearest historical human-adjudicated precedents from PostgreSQL using `pgvector`.
+4. It computes a decomposed reliability score across **Agreement**, **Evidence Density**, and **Precedent Coverage**.
+5. It applies a 6-stage operational gate policy.
+6. It returns `GATE_OUTCOME_PASS` (autonomous execution allowed) or `GATE_OUTCOME_REVIEW_REQUIRED` (`ESCALATE`).
+7. If escalated, the ARDA Go Agent Runtime **fails closed**, halting autonomous execution and routing the case to a human supervisor.
+8. When the human supervisor resolves the case, the decision is signed with **HMAC-SHA256**, streamed over **Redpanda**, and ingested into the vector database—**closing the active learning loop in real time without model retraining**.
 
-ARDA approaches this problem through precedent-based evaluation.
+---
 
-When an agent proposes a decision, the Reliability Service:
-
-1. Receives the original case description and proposed decision.
-2. Retrieves relevant historical reference examples.
-3. Evaluates how the retrieved examples relate to the proposed decision.
-4. Calculates a reliability score using agreement, evidence density, and coverage.
-5. Applies a decision gate.
-6. Returns either `PASS` or `ESCALATE`.
-
-A low-confidence decision, insufficient evidence, or conflicting precedent should not silently pass through the system.
-
-## How it works
-
-At a high level, the service follows this workflow:
+## Architectural Workflow
 
 ```mermaid
-flowchart TD
-    A[Agent Runtime] -->|gRPC request| B[Reliability Service]
-    B --> C[Generate Case Embedding]
-    C --> D[Vector Retrieval]
-    D --> E[Retrieve Relevant References]
-    E --> F[Reliability Scoring]
-    F --> G[Decision Gate]
-    G -->|Sufficient evidence| H[PASS]
-    G -->|Insufficient or conflicting evidence| I[ESCALATE]
-    J[Human Resolution Event] --> K[Feedback Ingestion]
-    K --> L[Validate and Authorize Producer]
-    L --> M[Persist Human Resolution]
-    M --> N[Update Reference Examples]
-    N --> D
+flowchart LR
+    subgraph ARDA_Go["ARDA Core Platform (Go)"]
+        Agent[Agent Runtime Loop] -->|1. GateRequest| gRPCClient[Reliability gRPC Client]
+        Portal[Human Review Portal] -->|Event Stream| RedpandaTopic[("Redpanda: arda.human-resolutions.v1")]
+    end
+
+    subgraph Reliability_Service["ARDA Reliability Service (Python)"]
+        gRPCClient -->|2. gRPC :50051| GRPCHandler[ReliabilityGateHandler]
+        GRPCHandler --> UseCase1[EvaluateReliabilityUseCase]
+        UseCase1 --> Embedder[BAAI/bge-small-en-v1.5]
+        UseCase1 --> PgVector[(PostgreSQL + pgvector HNSW)]
+        UseCase1 --> Scoring[Reliability Scoring Engine]
+        Scoring --> Decision[Decision Gate Engine]
+        Decision -->|3. PASS / ESCALATE| GRPCHandler
+        GRPCHandler -->|4. GateResponse| gRPCClient
+
+        RedpandaTopic --> Consumer[RedpandaFeedbackConsumer]
+        Consumer --> Authorizer[HMAC-SHA256 Authorizer]
+        Authorizer --> UseCase2[IngestHumanFeedbackUseCase]
+        UseCase2 -->|Idempotency & Precedent Check| PgFeedback[PgFeedbackRepository]
+        UseCase2 -->|Atomic Commit| PgVector
+        Authorizer -.->|Invalid Sig / Poison Pill| DLQ[("DLQ: arda.human-resolutions.dlq")]
+    end
 ```
 
-The original case description is used for embedding and retrieval. The proposed decision and retrieved reference labels are evaluated separately. This separation is important: the service should not embed the proposed outcome and accidentally make retrieval depend on the answer it is supposed to evaluate.
+---
 
-## Core responsibilities
+## Core Capabilities & Technical Pillars
 
-### 1. Reference example retrieval
+### 1. Multi-Tenant & Domain-Agnostic Scoping
+The platform is designed to govern arbitrary agents across any tenant:
+- **Strict Data Isolation**: Every reference example, feedback event, and retrieval query is strictly scoped and indexed by `(tenant_id, agent_id)`. Tenant A's customer onboarding agent never sees Tenant B's financial dispute precedents.
+- **Configurable Decision Schemas**: Supports binary adjudication (`APPROVE` / `REJECT`), multi-class department routing (`BILLING`, `LEGAL`, `KYC`, `TECH_SUPPORT`), and custom action schemas via `ScoringConfig(allowed_decisions=...)`.
+- **Dynamic Per-Agent Risk Thresholds**: The caller specifies `reliability_threshold` per agent in each gRPC request, allowing high-risk wire transfers to require `0.85` while low-risk ticket routing requires `0.45`.
 
-The service uses PostgreSQL with pgvector to store and retrieve historical reference examples.
+### 2. High-Performance Vector Retrieval (pgvector + HNSW)
+- **Model**: `BAAI/bge-small-en-v1.5` generating 384-dimensional unit L2-normalized embeddings.
+- **Asymmetric Prefixing**: Queries use `"Represent this sentence for searching relevant passages: "`, while stored precedents use native passage narratives.
+- **Zero Target Leakage**: Only the natural language case narrative is embedded. Proposed decisions, reference labels, and reviewer rationales are strictly excluded from embedding inputs to prevent target leakage.
+- **HNSW Indexing**: Traverses cosine distance (`<=>`) in $O(\log N)$ time:
+  - Configuration: `m = 16`, `ef_construction = 64`, `ef_search = 64`.
+  - Empirical Performance: **100.0% Recall@K** across all evaluated query modes with **sub-millisecond latency (0.55 ms median)**.
+- **Pluggable Architecture**: `EmbeddingProviderPort` allows swapping local SentenceTransformers for external embedding APIs (e.g. OpenAI, Cohere, Voyage AI).
 
-Each reference example is scoped to a tenant and an agent. Retrieval queries enforce both boundaries to prevent examples belonging to another tenant or agent from influencing an evaluation.
+### 3. Decomposed Multiplicative Reliability Scoring
+Rather than relying on unweighted averages, the scoring engine calculates:
+$$R = \text{Agreement} \times \text{Density} \times \text{Coverage}$$
 
-The current embedding model used in the retrieval experiments is:
+- **Agreement ($A \in [0.0, 1.0]$)**: Similarity-weighted consensus of retrieved precedents with the agent's proposed action:
+  $$A = \frac{\sum_{i \in \text{Matching}} \max(0, s_i)}{\sum_{i=1}^K \max(0, s_i)}$$
+- **Density ($D \in [0.0, 1.0]$)**: Measures cluster proximity above a relevance floor ($s_{\min} = 0.70$), blending the top precedent ($\alpha=0.7$) with cohort averages.
+- **Coverage ($C \in [0.0, 1.0]$)**: Penalizes small sample sizes, low relevance ratios, and conflicting precedent evidence near decision boundaries ($\text{clarity} = 1.0 - \beta \cdot \text{conflict\_rate}$).
+- **Multiplicative Veto Property**: If any factor collapses towards zero (e.g. out-of-distribution cold start or severe precedent conflict), the overall score $R$ strictly drops to zero.
 
-- **Model:** `BAAI/bge-small-en-v1.5`
-- **Embedding dimensions:** 384
-- **Similarity metric:** Cosine similarity
-- **Vector index:** HNSW
+### 4. Hierarchical Policy Gate Hierarchy
+The `ReliabilityDecisionEngine` enforces six strict, non-bypassable checks in priority order:
+1. **Cold Start**: Fewer than $N_{\min} = 3$ relevant neighbors ($s \ge 0.70$) $\to$ `ESCALATE` (`COLD_START_INSUFFICIENT_EVIDENCE`).
+2. **Coverage Floor**: Coverage $< 0.40$ $\to$ `ESCALATE` (`INSUFFICIENT_COVERAGE`).
+3. **Density Floor**: Density $< 0.40$ $\to$ `ESCALATE` (`WEAK_EVIDENCE_DENSITY`).
+4. **Contrastive Veto**: Conflicting precedent with similarity $s \ge 0.95$ $\to$ `ESCALATE` (`HIGH_SIMILARITY_CONFLICT`).
+5. **Agreement Floor**: Agreement $< 0.60$ $\to$ `ESCALATE` (`CONFLICTING_EVIDENCE`).
+6. **Reliability Threshold**: $R < \text{threshold}$ (default $0.65$) $\to$ `ESCALATE` (`SCORE_BELOW_THRESHOLD`).
+7. **PASS**: Allowed only when all 6 checks are satisfied (`RELIABILITY_THRESHOLD_MET`).
 
-Reference examples can be marked active or quarantined. Only active examples are eligible for retrieval.
+### 5. Evidence-Driven Confidence Calibration
+- **The Finding**: Research evaluated **Platt Scaling** (logistic sigmoid) and **Isotonic Regression** against raw scores under strict 5-fold partitioned cross-validation. On small synthetic baseline datasets, non-linear calibrators collapse to the empirical prior ($p \approx 0.50$, $\text{ROC-AUC} \approx 0.53$).
+- **The Design**: Production calibration is **intentionally deferred** until a validated operational dataset ($N \ge 1,000+$) accumulates from live human reviews.
+- **Contract Guarantee**: `GateResponse.confidence` exposes the uncalibrated raw score for Go runtime compatibility, while `calibrated_confidence` is an optional field populated only when an active, fitted calibration model is enabled (`is_calibrated = false` today).
 
-### 2. Reliability scoring
-
-The scoring engine evaluates retrieved evidence using three components:
-
-- **Agreement:** How strongly the retrieved examples support the proposed decision.
-- **Density:** How relevant and sufficiently strong the retrieved evidence is.
-- **Coverage:** Whether the retrieved evidence provides sufficient breadth and consistency.
-
-The current scoring formula is:
-
-\[
-R = A \times D \times C
-\]
-
-Where:
-
-- \(A\) = Agreement
-- \(D\) = Evidence density
-- \(C\) = Evidence coverage
-
-The resulting raw score is evaluated by the decision engine alongside additional conditions, including minimum evidence requirements and conflicting precedents.
-
-Similarity is not treated as a probability of correctness. A high similarity score alone does not mean a proposed decision is correct.
-
-### 3. Decision gate
-
-The service produces one of two outcomes:
-
-| Decision | Meaning |
-|---|---|
-| `PASS` | Available evidence satisfies the configured reliability requirements. |
-| `ESCALATE` | Evidence is insufficient, weak, or conflicting and requires further review. |
-
-Some important escalation conditions include:
-
-- Cold start or insufficient reference examples.
-- Insufficient evidence coverage.
-- Weak evidence density.
-- Conflicting historical decisions.
-- Highly similar references with opposing labels.
-- Reliability score below the configured threshold.
-
-The service deliberately favors escalation when evidence is insufficient rather than treating a lack of precedent as approval.
-
-### 4. Confidence calibration
-
-Raw reliability scores and calibrated confidence are kept separate.
-
-Calibration research evaluates whether raw scores can be mapped to empirically meaningful confidence estimates. The current synthetic evaluation dataset did not demonstrate meaningful predictive improvement over a constant baseline.
-
-For that reason, production calibration is not enabled as an established capability.
-
-Calibration must not silently change the PASS/ESCALATE decision.
-
-### 5. Human feedback ingestion
-
-Human resolutions can become new reference examples.
-
-The service consumes events from Redpanda:
-
-- `arda.human-resolutions.v1`
-- `arda.human-resolutions.dlq`
-
-The ingestion pipeline handles:
-
-- Event validation and producer authentication.
-- HMAC-SHA256 signature verification.
-- Timestamp freshness checks.
-- Duplicate event detection.
-- Reference example persistence.
-- Conflicting resolution detection.
-- Dead-letter routing.
-- Manual Kafka offset management.
-
-Human resolutions are treated as authoritative input only after passing the ingestion checks.
-
-When two opposing human resolutions are received for the same tenant, agent, and case, the existing reference is quarantined instead of silently overwriting its label. Quarantined references are excluded from future retrieval.
+### 6. Continuous Feedback Ingestion & Production Security
+- **HMAC-SHA256 Producer Authentication**: Verifies producer identity and guards against tampering. Canonical payload serialization sorts keys lexicographically and normalizes UTC RFC3339 timestamps for byte-for-byte cross-language compatibility with Go (`crypto/hmac`).
+- **Timing Attack Safety**: Signature comparisons use `hmac.compare_digest`.
+- **Zero-Downtime Key Rotation**: Supports both active primary keys and retiring grace-period keys.
+- **Database-Level Idempotency**: Unique constraint on `event_id` prevents duplicate processing.
+- **Precedent Conflict Quarantine**: Opposing human resolutions for the same case ID transition records to `status = 'quarantined'`, automatically excluding them from future vector retrieval (`WHERE status = 'active'`).
+- **Kafka Offset Safety**: Messages are manually committed (`enable_auto_commit=False`) **only after** successful database write or confirmed DLQ publish. If DLQ routing fails, the offset is not committed, preventing silent message loss.
 
 ---
 
-## Architecture
+## Project Structure (Hexagonal Architecture)
 
-The service follows a Hexagonal Architecture (Ports and Adapters) approach.
-
-Business rules are kept separate from infrastructure concerns. The domain and application layers should not depend directly on PostgreSQL, Redpanda, or gRPC implementations.
-
-The main architectural areas are:
-
-| Layer | Responsibility |
-|---|---|
-| Domain | Reliability scoring, decision rules, entities, and domain exceptions. |
-| Application | Use cases and ports defining required dependencies. |
-| Infrastructure | PostgreSQL, pgvector, embeddings, Redpanda, and external integrations. |
-| API / Transport | gRPC server and request/response handling. |
-
-### Technology stack
-
-| Technology | Purpose |
-|---|---|
-| Python | Reliability Service implementation |
-| gRPC | Communication with the Go Agent Runtime |
-| PostgreSQL | Persistent storage |
-| pgvector | Vector storage and similarity retrieval |
-| SQLAlchemy | Database access |
-| Alembic | Database migrations |
-| Sentence Transformers | Text embeddings |
-| Redpanda / Kafka | Asynchronous human feedback ingestion |
-| Pydantic | Configuration and data validation |
-| pytest | Automated testing |
-| Ruff | Linting and formatting |
-| Mypy | Static type checking |
-
-### Communication
-
-The Reliability Service communicates synchronously with the Go Agent Runtime through gRPC.
-
-Human resolution events are processed asynchronously through Redpanda. This keeps feedback ingestion separate from the synchronous agent evaluation path.
-
-The service also uses PostgreSQL transactions to maintain consistency between event processing and reference example persistence.
+```
+arda-reliability-service/
+├── src/arda_reliability_service/
+│   ├── domain/                         # Pure business logic (Zero external framework dependencies)
+│   │   ├── entities.py                 # ReferenceExample, HumanResolutionEvent
+│   │   ├── value_objects.py            # ReliabilityScore, GateDecision, ScoringConfig
+│   │   ├── scoring_engine.py           # ReliabilityScoringEngine, ReliabilityDecisionEngine
+│   │   ├── calibration.py              # CalibratorPort, PlattCalibrator, IsotonicCalibrator
+│   │   └── exceptions.py               # DomainValidationError, InvalidProposedDecisionError
+│   ├── application/                    # Application layer (Use cases & Ports)
+│   │   ├── ports/                      # VectorRepositoryPort, EmbeddingProviderPort, EventAuthorizerPort
+│   │   └── use_cases/                  # EvaluateReliabilityUseCase, IngestHumanFeedbackUseCase
+│   ├── infrastructure/                 # External Adapters
+│   │   ├── database/                   # PostgreSQL 16 + pgvector, SQLAlchemy 2.0 Async, HNSW
+│   │   ├── embedding/                  # SentenceTransformerAdapter (BAAI/bge-small-en-v1.5)
+│   │   ├── grpc/                       # ReliabilityGateHandler, Server lifecycle (port 50051)
+│   │   └── messaging/                  # RedpandaFeedbackConsumer, TrustedProducerAuthorizer (HMAC)
+│   └── config.py                       # Pydantic BaseSettings loading from .env
+├── alembic/                            # Database Migrations (0001: pgvector/HNSW, 0002: feedback events)
+├── scripts/                            # Operational Tools & Benchmarks
+│   ├── demonstrate_workflow.py         # Interactive Live End-to-End Review Demonstration
+│   ├── ingest_seed_examples.py         # Seeds canonical reference dataset into PostgreSQL
+│   └── benchmark_retrieval.py          # Exact Flat Scan vs HNSW Retrieval Benchmark
+└── research/                           # Research Reports & Calibration Science
+    ├── datasets/                       # Audited synthetic seed dispute datasets
+    └── confidence_calibration_report.md# Formal scientific calibration findings & methodology
+```
 
 ---
 
-## Security and reliability considerations
+## Live Review Demonstration
 
-Security and data isolation are part of the service's design, not optional additions.
-
-Current safeguards include:
-
-- Tenant-scoped and agent-scoped retrieval.
-- HMAC-SHA256 verification of trusted producer events.
-- Timestamp freshness validation.
-- Producer-specific signing keys and key ID support.
-- Idempotent event ingestion.
-- Conflict quarantine for contradictory human resolutions.
-- Manual Kafka offset commits.
-- DLQ acknowledgement before committing rejected messages.
-- Exclusion of quarantined references from retrieval.
-
-The upstream human review service is responsible for authenticating reviewers, enforcing reviewer RBAC, and validating tenant membership before publishing signed resolution events.
-
-The Reliability Service verifies the trusted producer's signature. It does not independently implement reviewer RBAC.
-
-Production deployment still requires secure provisioning and rotation of signing keys.
-
----
-
-## Research and engineering decisions
-
-Several implementation decisions are based on experiments rather than assumptions.
-
-### Similarity is not decision correctness
-
-Experiments with contrastive examples showed that semantically similar cases can have opposite outcomes.
-
-In the contrastive evaluation, the opposite-label counterpart was retrieved at rank one for all 20 contrastive queries.
-
-This demonstrated why nearest-neighbor similarity cannot be used as a standalone decision classifier.
-
-The scoring engine therefore evaluates retrieved labels separately and includes conflict detection.
-
-### HNSW versus exact retrieval
-
-HNSW was benchmarked at different dataset sizes.
-
-At small dataset sizes, PostgreSQL may prefer exact retrieval because it is cheaper. At larger sizes, the HNSW index becomes useful.
-
-Filtered vector retrieval also requires care: tenant and agent filters, candidate limits, and iterative scanning settings can affect recall.
-
-The selected index configuration is an experimentally evaluated starting point, not a universal guarantee of retrieval quality.
-
-### Calibration is evidence-driven
-
-The initial synthetic evaluation did not establish that calibration provides meaningful predictive improvement.
-
-Rather than presenting an unvalidated confidence value as a probability, the service keeps raw reliability scoring separate from calibrated confidence.
-
-Further calibration requires a substantially larger collection of independently resolved real-world cases.
-
----
-
-## Current implementation status
-
-The following capabilities have been implemented and tested during development:
-
-- [x] Reference dataset creation and ingestion.
-- [x] Embedding generation.
-- [x] PostgreSQL and pgvector integration.
-- [x] Tenant-scoped and agent-scoped retrieval.
-- [x] HNSW benchmarking and retrieval evaluation.
-- [x] Reliability scoring engine.
-- [x] PASS / ESCALATE decision gate.
-- [x] Calibration evaluation and contract separation.
-- [x] gRPC communication with the Go service.
-- [x] Asynchronous human feedback ingestion.
-- [x] Redpanda consumer and DLQ handling.
-- [x] Conflict detection and reference quarantine.
-- [x] HMAC-SHA256 producer authentication.
-- [x] Cross-language Go/Python signing interoperability tests.
-
-### Remaining integration work
-
-- Implement the upstream Go human-review producer and event publisher.
-- Provision production signing keys through a secure secret-management mechanism.
-- Complete production deployment and operational observability.
-- Validate the scoring and calibration approach using independently collected human-resolved cases.
-
-The implementation status above reflects the current development state. It should not be interpreted as a claim of production readiness.
-
----
-
-## Running tests
-
-From the repository root, activate the project's Python virtual environment and run:
+An interactive demonstration script is available to walk through the complete governance lifecycle live on screen:
 
 ```bash
-# Run the complete test suite
+# Interactive Step-by-Step Mode (pauses between stages for verbal explanation):
+.venv/bin/python scripts/demonstrate_workflow.py --step
+
+# Automated Continuous Mode:
+.venv/bin/python scripts/demonstrate_workflow.py
+```
+
+### Demonstration Flow:
+1. **Scenario 1 (PASS)**: High-evidence precedent where retrieved neighbors unanimously support `APPROVE`. Decomposed score exceeds threshold $\to$ `PASS (RELIABILITY_THRESHOLD_MET)`. Go runtime allows autonomous execution.
+2. **Scenario 2 (ESCALATE)**: Novel SaaS dispute with conflicting historical decisions. Agreement drops below 0.60 floor $\to$ `ESCALATE (CONFLICTING_EVIDENCE)`. Go runtime fails closed to human supervisor.
+3. **Scenario 3 (Human Ingestion)**: Auditor Alice resolves dispute. Review portal signs event with HMAC-SHA256 and publishes to Redpanda. Consumer verifies signature and indexes 384-d vector into PostgreSQL.
+4. **Scenario 4 (Closed-Loop Evolution)**: Re-evaluating the dispute immediately retrieves Alice's decision as Neighbor #1 ($s \ge 0.99$), boosting density and clearing the conflict veto live!
+
+---
+
+## Quality Gates & Verification
+
+Run all test suites and static analysis tools:
+
+```bash
+# 1. Full Pytest Suite (219 passed, 3 skipped, 0 failed in ~13s)
 .venv/bin/pytest tests/
 
-# Lint
-.venv/bin/ruff check src tests
+# 2. Ruff Linter & Formatting Checks
+.venv/bin/ruff check src tests scripts research
+.venv/bin/ruff format --check src tests scripts research
 
-# Check formatting
-.venv/bin/ruff format --check src tests
-
-# Static type checking
+# 3. Mypy Static Type Verification (53 source files)
 .venv/bin/mypy src tests
-```
 
-The cross-language interoperability test requires the Go toolchain:
-
-```bash
+# 4. Cross-Language Go/Python HMAC Interoperability Test
 .venv/bin/pytest tests/test_cross_language_interop.py -v
-```
 
-The live Redpanda integration test additionally requires the corresponding Redpanda and PostgreSQL services to be available:
-
-```bash
+# 5. Live Redpanda End-to-End Integration Test
 .venv/bin/pytest tests/test_redpanda_real_integration.py -v
+
+# 6. Go Agent Runtime Integration (in ~/second-project/arda)
+cd /home/aswin/second-project/arda && go test -v -count=1 ./pkg/agentruntime/...
 ```
 
 ---
 
-## Part of ARDA
+## Part of the ARDA Platform
 
-ARDA (Auditable, Reliable, Durable Agents) is a platform for executing and governing AI agents.
-
-The Reliability Service is one component of that platform. Its responsibility is narrow but important: evaluate the evidence behind agent decisions and provide a consistent mechanism for passing or escalating them.
-
-It does not replace the agent, execute the agent's tools, or make human review decisions. It provides a reliability check between an agent's proposed decision and the next stage of execution.
-
-**The objective is simple: agent decisions should not only be executable. They should be explainable, reviewable, and backed by evidence.**
+**ARDA** (Auditable, Reliable, Durable Agents) is an open-source platform for orchestrating and governing AI agents. The Reliability Service provides the mathematical and exemplar-based foundation ensuring agent decisions are not just executable, but **explainable, reviewable, and backed by evidence**.

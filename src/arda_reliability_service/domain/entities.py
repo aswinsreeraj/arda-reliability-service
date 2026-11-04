@@ -60,7 +60,12 @@ class ReferenceExample:
                 "case_description must not be empty or whitespace."
             )
 
-        if self.label not in VALID_LABELS:
+        if not self.label or not self.label.strip():
+            raise DomainValidationError("label must not be empty or whitespace.")
+
+        if self.metadata.get("custom_domain") or self.metadata.get("domain"):
+            pass
+        elif self.label not in VALID_LABELS:
             raise DomainValidationError(
                 f"Invalid label '{self.label}'. Must be one of {sorted(VALID_LABELS)}."
             )
@@ -137,14 +142,24 @@ class HumanResolutionEvent:
                 "original_case_description must not be empty or whitespace."
             )
 
-        if self.human_decision not in VALID_LABELS:
+        if not self.human_decision or not self.human_decision.strip():
             raise UnreviewedAgentDecisionError(
-                f"human_decision '{self.human_decision}' is invalid. Authoritative human decision must be one of {sorted(VALID_LABELS)}."
+                "human_decision must not be empty or whitespace."
             )
 
-        if self.proposed_decision not in VALID_LABELS:
+        if self.human_decision.upper().strip() in {
+            "UNREVIEWED",
+            "PENDING",
+            "UNKNOWN",
+            "NONE",
+        }:
+            raise UnreviewedAgentDecisionError(
+                f"human_decision '{self.human_decision}' is invalid. Authoritative human decision required."
+            )
+
+        if not self.proposed_decision or not self.proposed_decision.strip():
             raise DomainValidationError(
-                f"proposed_decision '{self.proposed_decision}' is invalid. Must be one of {sorted(VALID_LABELS)}."
+                "proposed_decision must not be empty or whitespace."
             )
 
         if not self.reviewer_id or not self.reviewer_id.strip():

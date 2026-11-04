@@ -101,9 +101,13 @@ class HumanResolutionEventDTO(BaseModel):
     @classmethod
     def validate_human_decision(cls, v: str) -> str:
         v_upper = v.upper().strip()
-        if v_upper not in AUTHORITATIVE_DECISIONS:
+        if not v_upper:
             raise UnreviewedAgentDecisionError(
-                f"Invalid human_decision '{v}'. Authoritative human decision must be one of {sorted(AUTHORITATIVE_DECISIONS)}."
+                "human_decision cannot be empty or whitespace."
+            )
+        if v_upper in {"UNREVIEWED", "PENDING", "UNKNOWN", "NONE"}:
+            raise UnreviewedAgentDecisionError(
+                f"Invalid human_decision '{v}'. Authoritative human decision required."
             )
         return v_upper
 
@@ -111,9 +115,9 @@ class HumanResolutionEventDTO(BaseModel):
     @classmethod
     def validate_proposed_decision(cls, v: str) -> str:
         v_upper = v.upper().strip()
-        if v_upper not in AUTHORITATIVE_DECISIONS:
+        if not v_upper:
             raise EventValidationError(
-                f"Invalid proposed_decision '{v}'. Must be one of {sorted(AUTHORITATIVE_DECISIONS)}."
+                "proposed_decision cannot be empty or whitespace."
             )
         return v_upper
 

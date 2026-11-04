@@ -306,9 +306,7 @@ class TestHnswVerification:
                 # Clean production/seed state: benchmark data has not been ingested
                 pass
             else:
-                assert bench_total >= 12500, (
-                    "Benchmark partition count mismatch!"
-                )
+                assert bench_total >= 12500, "Benchmark partition count mismatch!"
 
             # 3. Ensure no crossover
             overlap = await s.execute(

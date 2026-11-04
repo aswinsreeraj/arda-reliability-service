@@ -116,14 +116,21 @@ class ReliabilityGateHandler(reliability_pb2_grpc.ReliabilityServiceServicer):
             )
 
         # 4. Validate proposed_decision
-        valid_decisions = {
-            ProposedDecision.APPROVE.value,
-            ProposedDecision.REJECT.value,
-        }
-        if request.proposed_decision not in valid_decisions:
+        if not request.proposed_decision or not request.proposed_decision.strip():
             await context.abort(
                 grpc.StatusCode.INVALID_ARGUMENT,
-                f"Invalid proposed_decision '{request.proposed_decision}'. Must be one of {sorted(valid_decisions)}.",
+                "proposed_decision must not be empty or whitespace.",
+            )
+
+        allowed = (
+            set(self.config.allowed_decisions)
+            if self.config.allowed_decisions is not None
+            else {ProposedDecision.APPROVE.value, ProposedDecision.REJECT.value}
+        )
+        if allowed and request.proposed_decision not in allowed:
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                f"Invalid proposed_decision '{request.proposed_decision}'. Must be one of {sorted(allowed)}.",
             )
 
         # 5. Validate reliability_threshold
@@ -139,6 +146,7 @@ class ReliabilityGateHandler(reliability_pb2_grpc.ReliabilityServiceServicer):
             agent_id=agent_uuid,
             case_description=case_description,
             proposed_decision=request.proposed_decision,
+            allowed_decisions=self.config.allowed_decisions,
         )
 
         custom_cfg: ScoringConfig | None = None

@@ -555,3 +555,45 @@ class TestReliabilityGateHandlerUnit:
         assert ctx.aborted
         assert ctx.code == grpc.StatusCode.INVALID_ARGUMENT
         assert "Domain invariant violated" in (ctx.details or "")
+
+    @pytest.mark.asyncio
+    async def test_multi_domain_agent_decision_accepted_via_grpc(
+        self, mock_use_case: AsyncMock
+    ) -> None:
+        """Handler configured with domain-specific decisions accepts custom actions."""
+        custom_handler = ReliabilityGateHandler(
+            evaluate_use_case=mock_use_case,
+            config=ScoringConfig(allowed_decisions=("BILLING", "LEGAL", "KYC")),
+        )
+        mock_use_case.execute.return_value = ReliabilityEvaluationResult(
+            decision=GateDecision.PASS,
+            proposed_decision="LEGAL",
+            raw_score=0.88,
+            agreement=0.90,
+            density_factor=0.85,
+            coverage_factor=0.95,
+            evidence_count=3,
+            matching_evidence_count=3,
+            conflicting_evidence_count=0,
+            evaluation_reason="Precedent threshold met for legal department routing",
+            reason_code=EvaluationReasonCode.RELIABILITY_THRESHOLD_MET.value,
+            threshold_used=0.65,
+            retrieved_evidence=[
+                ReferenceNeighbor("ref-1", "LEGAL", "synthetic", "Case 1", 0.95),
+            ],
+            metadata={},
+        )
+
+        req = reliability_pb2.GateRequest(
+            tenant_id=str(uuid4()),
+            agent_id=str(uuid4()),
+            case_description="Customer onboarding legal documents.",
+            proposed_decision="LEGAL",
+            reliability_threshold=0.65,
+        )
+        ctx = FakeServicerContext()
+        resp = await custom_handler.Gate(req, ctx)  # type: ignore[arg-type]
+
+        assert not ctx.aborted
+        assert resp.outcome == reliability_pb2.GATE_OUTCOME_PASS
+        assert resp.reason_code == "RELIABILITY_THRESHOLD_MET"

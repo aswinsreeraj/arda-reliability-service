@@ -560,3 +560,44 @@ class TestScoringConfigValidation:
         assert (
             scoring_cfg.min_reliability_threshold == settings.reliability_min_threshold
         )
+
+    def test_multi_domain_agent_decision_support(self) -> None:
+        """Arbitrary domain agents (e.g. onboarding department routing) are supported."""
+        engine = ReliabilityScoringEngine()
+        decision_engine = ReliabilityDecisionEngine()
+        config = ScoringConfig(
+            allowed_decisions=("BILLING", "LEGAL", "KYC", "SALES"),
+            min_reliability_threshold=0.60,
+        )
+
+        neighbors = [
+            _make_neighbor(
+                "ref-1",
+                "LEGAL",
+                0.94,
+                "Customer uploaded German commercial register extract",
+            ),
+            _make_neighbor(
+                "ref-2",
+                "LEGAL",
+                0.91,
+                "Corporate charter and power of attorney verification",
+            ),
+            _make_neighbor(
+                "ref-3", "LEGAL", 0.88, "EU cross-border entity compliance review"
+            ),
+            _make_neighbor(
+                "ref-4", "LEGAL", 0.85, "Foreign ownership compliance certificate"
+            ),
+        ]
+
+        score = engine.calculate_score(neighbors, "LEGAL", config)
+        assert score.agreement == 1.0
+        assert score.density_factor > 0.60
+        assert score.raw_score >= 0.60
+
+        decision, code, _reason = decision_engine.evaluate(
+            score, neighbors, "LEGAL", config
+        )
+        assert decision == GateDecision.PASS
+        assert code == EvaluationReasonCode.RELIABILITY_THRESHOLD_MET.value

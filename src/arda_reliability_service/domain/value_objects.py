@@ -92,6 +92,10 @@ class ScoringConfig:
     top_k: int = 5
     ef_search: int = 64
     weighting_strategy: str = "similarity_weighted"
+    allowed_decisions: tuple[str, ...] | None = (
+        ProposedDecision.APPROVE.value,
+        ProposedDecision.REJECT.value,
+    )
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.min_similarity_threshold < 1.0):
@@ -152,19 +156,26 @@ class ReliabilityEvaluationRequest:
     agent_id: UUID
     case_description: str
     proposed_decision: str
+    allowed_decisions: tuple[str, ...] | None = (
+        ProposedDecision.APPROVE.value,
+        ProposedDecision.REJECT.value,
+    )
 
     def __post_init__(self) -> None:
         if not self.case_description or not self.case_description.strip():
             raise InvalidDescriptionError(
                 "case_description must not be empty or whitespace."
             )
-        valid_decisions = {
-            ProposedDecision.APPROVE.value,
-            ProposedDecision.REJECT.value,
-        }
-        if self.proposed_decision not in valid_decisions:
+        if not self.proposed_decision or not self.proposed_decision.strip():
             raise InvalidProposedDecisionError(
-                f"Invalid proposed_decision '{self.proposed_decision}'. Must be one of {sorted(valid_decisions)}."
+                "proposed_decision must not be empty or whitespace."
+            )
+        if (
+            self.allowed_decisions is not None
+            and self.proposed_decision not in self.allowed_decisions
+        ):
+            raise InvalidProposedDecisionError(
+                f"Invalid proposed_decision '{self.proposed_decision}'. Must be one of {sorted(self.allowed_decisions)}."
             )
 
 
