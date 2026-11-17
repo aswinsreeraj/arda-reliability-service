@@ -34,7 +34,7 @@ flowchart LR
     end
 
     subgraph Reliability_Service["ARDA Reliability Service (Python)"]
-        gRPCClient -->|2. gRPC :50051| GRPCHandler[ReliabilityGateHandler]
+        gRPCClient -->|2. gRPC :50053| GRPCHandler[ReliabilityGateHandler]
         GRPCHandler --> UseCase1[EvaluateReliabilityUseCase]
         UseCase1 --> Embedder[BAAI/bge-small-en-v1.5]
         UseCase1 --> PgVector[(PostgreSQL + pgvector HNSW)]
