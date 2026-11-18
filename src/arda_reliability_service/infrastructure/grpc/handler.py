@@ -149,10 +149,34 @@ class ReliabilityGateHandler(reliability_pb2_grpc.ReliabilityServiceServicer):
             allowed_decisions=self.config.allowed_decisions,
         )
 
+        # Optional platform-wide top_k override passed via gRPC metadata (x-retrieval-top-k)
+        override_top_k: int | None = None
+        if context is not None and hasattr(context, "invocation_metadata"):
+            raw_meta = context.invocation_metadata() or ()
+            for key, val in raw_meta:
+                if key == "x-retrieval-top-k":
+                    try:
+                        parsed_k = int(str(val).strip())
+                        if 1 <= parsed_k <= 50:
+                            override_top_k = parsed_k
+                    except ValueError:
+                        pass
+                    break
+
         custom_cfg: ScoringConfig | None = None
-        if request.reliability_threshold > 0.0:
+        if request.reliability_threshold > 0.0 or override_top_k is not None:
             custom_cfg = replace(
-                self.config, min_reliability_threshold=request.reliability_threshold
+                self.config,
+                min_reliability_threshold=(
+                    request.reliability_threshold
+                    if request.reliability_threshold > 0.0
+                    else self.config.min_reliability_threshold
+                ),
+                top_k=(
+                    override_top_k
+                    if override_top_k is not None
+                    else self.config.top_k
+                ),
             )
 
         t0 = time.perf_counter()
